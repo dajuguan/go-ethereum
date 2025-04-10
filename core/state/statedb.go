@@ -18,9 +18,11 @@
 package state
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -219,6 +221,38 @@ func (s *StateDB) StopPrefetcher() {
 		s.prefetcher.terminate(false)
 		s.prefetcher.report()
 		s.prefetcher = nil
+	}
+}
+
+var AllBlockAccessLists = map[uint64]types.AccessList{}
+
+func (s *StateDB) PrefetchAccessList(blockNum uint64) {
+	// parallelize the access list prefetching
+	acls := AllBlockAccessLists[blockNum]
+	if acls == nil {
+		return
+	}
+	for _, acl := range acls {
+		addr := acl.Address
+		keys := acl.StorageKeys
+		s.getStateObject(addr)
+		for _, key := range keys {
+			s.GetState(addr, key)
+		}
+	}
+
+}
+
+func init() {
+	// load the access lists for all blocks
+	data, err := os.ReadFile("access_lists.json")
+	if err != nil {
+		log.Error("Failed to load access lists", "err", err)
+		return
+	}
+	if err := json.Unmarshal(data, &AllBlockAccessLists); err != nil {
+		log.Error("Failed to unmarshal access lists", "err", err)
+		return
 	}
 }
 
