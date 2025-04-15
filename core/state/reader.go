@@ -58,6 +58,7 @@ type StateReader interface {
 	// - Returns an error only if an unexpected issue occurs
 	// - The returned account is safe to modify after the call
 	Account(addr common.Address) (*types.StateAccount, error)
+	AccountACL(addr common.Address) (*types.StateAccount, error)
 
 	// Storage retrieves the storage slot associated with a particular account
 	// address and slot key.
@@ -144,7 +145,8 @@ func newFlatReader(reader database.StateReader) *flatReader {
 //
 // The returned account might be nil if it's not existent.
 func (r *flatReader) Account(addr common.Address) (*types.StateAccount, error) {
-	account, err := r.reader.Account(crypto.HashData(r.buff, addr.Bytes()))
+	// account, err := r.reader.Account(crypto.HashData(r.buff, addr.Bytes()))
+	account, err := r.reader.Account(crypto.Keccak256Hash(addr.Bytes()))
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +166,10 @@ func (r *flatReader) Account(addr common.Address) (*types.StateAccount, error) {
 		acct.Root = types.EmptyRootHash
 	}
 	return acct, nil
+}
+
+func (r *flatReader) AccountACL(addr common.Address) (*types.StateAccount, error) {
+	return r.Account(addr)
 }
 
 // Storage implements StateReader, retrieving the storage slot specified by the
@@ -247,6 +253,14 @@ func (r *trieReader) Account(addr common.Address) (*types.StateAccount, error) {
 	return account, nil
 }
 
+func (r *trieReader) AccountACL(addr common.Address) (*types.StateAccount, error) {
+	account, err := r.mainTrie.GetAccount(addr)
+	if err != nil {
+		return nil, err
+	}
+	return account, nil
+}
+
 // Storage implements StateReader, retrieving the storage slot specified by the
 // address and slot key.
 //
@@ -319,6 +333,18 @@ func (r *multiStateReader) Account(addr common.Address) (*types.StateAccount, er
 	var errs []error
 	for _, reader := range r.readers {
 		acct, err := reader.Account(addr)
+		if err == nil {
+			return acct, nil
+		}
+		errs = append(errs, err)
+	}
+	return nil, errors.Join(errs...)
+}
+
+func (r *multiStateReader) AccountACL(addr common.Address) (*types.StateAccount, error) {
+	var errs []error
+	for _, reader := range r.readers {
+		acct, err := reader.AccountACL(addr)
 		if err == nil {
 			return acct, nil
 		}

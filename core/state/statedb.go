@@ -227,24 +227,72 @@ func (s *StateDB) StopPrefetcher() {
 var AllBlockAccessLists = map[uint64]types.AccessList{}
 
 func (s *StateDB) PrefetchAccessList(blockNum uint64) {
+	log.Info("PrefetchAccessList for", "block:", blockNum)
 	// parallelize the access list prefetching
 	acls := AllBlockAccessLists[blockNum]
 	if acls == nil {
 		return
 	}
+
+	// for _, acl := range acls {
+	// 	addr := acl.Address
+	// 	keys := acl.StorageKeys
+	// 	s.getStateObject(addr)
+	// 	for _, key := range keys {
+	// 		s.GetState(addr, key)
+	// 	}
+	// }
+
+	tp := NewThreadPool(4)
+	tp.Start()
+
+	lenAccts := 0
+	accts := make(chan *stateObject, len(acls))
+
 	for _, acl := range acls {
 		addr := acl.Address
-		keys := acl.StorageKeys
-		s.getStateObject(addr)
-		for _, key := range keys {
-			s.GetState(addr, key)
+		if addr.Cmp(common.Address{100}) == -1 {
+			continue
 		}
+		lenAccts++
+		// keys := acl.StorageKeys
+
+		tp.AddTask(func() {
+			// it'll trigger map caching in trie, which is not thread safe
+			acct, err := s.reader.AccountACL(addr)
+			if err != nil {
+				log.Error("fail to fetch account:", addr)
+			}
+			// Insert into the live set
+			obj := newObject(s, addr, acct)
+			accts <- obj
+
+			// for _, key := range keys {
+			// log.Info("fetch storage for", "addr:", addr, "key:", key)
+			// key := key
+			// tp.AddTask(func() {
+			// 	value, err := obj.db.reader.Storage(addr, key)
+			// 	if err != nil {
+			// 		log.Error("fail to fetch storage:", addr, key)
+			// 	}
+			// 	obj.originStorage[key] = value
+			// })
+			// }
+		})
 	}
 
+	tp.Stop()
+	for range lenAccts {
+		obj := <-accts
+		s.setStateObject(obj)
+	}
+
+	close(accts)
 }
 
 func init() {
 	// load the access lists for all blocks
+	log.Info("Importing access_lists.json")
 	data, err := os.ReadFile("access_lists.json")
 	if err != nil {
 		log.Error("Failed to load access lists", "err", err)
@@ -254,6 +302,7 @@ func init() {
 		log.Error("Failed to unmarshal access lists", "err", err)
 		return
 	}
+	log.Info("Imported access_lists.json")
 }
 
 // setError remembers the first non-nil error it is called with.
