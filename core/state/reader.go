@@ -67,6 +67,7 @@ type StateReader interface {
 	// - Returns an error only if an unexpected issue occurs
 	// - The returned storage slot is safe to modify after the call
 	Storage(addr common.Address, slot common.Hash) (common.Hash, error)
+	StorageACL(addr common.Address, slot common.Hash, tr *trie.StateTrie) (common.Hash, error)
 }
 
 // Reader defines the interface for accessing accounts, storage slots and contract
@@ -180,8 +181,10 @@ func (r *flatReader) AccountACL(addr common.Address) (*types.StateAccount, error
 //
 // The returned storage slot might be empty if it's not existent.
 func (r *flatReader) Storage(addr common.Address, key common.Hash) (common.Hash, error) {
-	addrHash := crypto.HashData(r.buff, addr.Bytes())
-	slotHash := crypto.HashData(r.buff, key.Bytes())
+	// addrHash := crypto.HashData(r.buff, addr.Bytes())
+	// slotHash := crypto.HashData(r.buff, key.Bytes())
+	addrHash := crypto.Keccak256Hash(addr.Bytes())
+	slotHash := crypto.Keccak256Hash(key.Bytes())
 	ret, err := r.reader.Storage(addrHash, slotHash)
 	if err != nil {
 		return common.Hash{}, err
@@ -198,6 +201,10 @@ func (r *flatReader) Storage(addr common.Address, key common.Hash) (common.Hash,
 	var value common.Hash
 	value.SetBytes(content)
 	return value, nil
+}
+
+func (r *flatReader) StorageACL(addr common.Address, key common.Hash, tr *trie.StateTrie) (common.Hash, error) {
+	return r.Storage(addr, key)
 }
 
 // trieReader implements the StateReader interface, providing functions to access
@@ -304,6 +311,15 @@ func (r *trieReader) Storage(addr common.Address, key common.Hash) (common.Hash,
 	return value, nil
 }
 
+func (r *trieReader) StorageACL(addr common.Address, key common.Hash, tr *trie.StateTrie) (common.Hash, error) {
+	ret, err := tr.GetStorage(addr, key.Bytes())
+	if err != nil {
+		return common.Hash{}, err
+	}
+
+	return common.BytesToHash(ret), nil
+}
+
 // multiStateReader is the aggregation of a list of StateReader interface,
 // providing state access by leveraging all readers. The checking priority
 // is determined by the position in the reader list.
@@ -363,6 +379,18 @@ func (r *multiStateReader) Storage(addr common.Address, slot common.Hash) (commo
 	var errs []error
 	for _, reader := range r.readers {
 		slot, err := reader.Storage(addr, slot)
+		if err == nil {
+			return slot, nil
+		}
+		errs = append(errs, err)
+	}
+	return common.Hash{}, errors.Join(errs...)
+}
+
+func (r *multiStateReader) StorageACL(addr common.Address, slot common.Hash, tr *trie.StateTrie) (common.Hash, error) {
+	var errs []error
+	for _, reader := range r.readers {
+		slot, err := reader.StorageACL(addr, slot, tr)
 		if err == nil {
 			return slot, nil
 		}

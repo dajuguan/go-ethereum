@@ -237,17 +237,29 @@ func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 	// for _, acl := range acls {
 	// 	addr := acl.Address
 	// 	keys := acl.StorageKeys
-	// 	s.getStateObject(addr)
+	// 	obj := s.getStateObject(addr)
 	// 	for _, key := range keys {
-	// 		s.GetState(addr, key)
+	// 		log.Info("fetch storage for", "addr:", addr.Hex(), "key:", key.Hex())
+	// 		log.Info("hash:", "addr:", crypto.Keccak256Hash(addr[:]).Hex(), "key:", crypto.Keccak256Hash(key[:]).Hex())
+	// 		obj.db.reader.Storage(addr, key)
 	// 	}
 	// }
 
-	tp := NewThreadPool(4)
+	type StateObject struct {
+		obj  *stateObject
+		keys []common.Hash
+	}
+
+	type StorageKV struct {
+		key *common.Hash
+		val *common.Hash
+	}
+
+	tp := NewThreadPool(25)
 	tp.Start()
 
 	lenAccts := 0
-	accts := make(chan *stateObject, len(acls))
+	accts := make(chan StateObject, len(acls))
 
 	for _, acl := range acls {
 		addr := acl.Address
@@ -255,7 +267,7 @@ func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 			continue
 		}
 		lenAccts++
-		// keys := acl.StorageKeys
+		keys := acl.StorageKeys
 
 		tp.AddTask(func() {
 			// it'll trigger map caching in trie, which is not thread safe
@@ -265,28 +277,51 @@ func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 			}
 			// Insert into the live set
 			obj := newObject(s, addr, acct)
-			accts <- obj
-
-			// for _, key := range keys {
-			// log.Info("fetch storage for", "addr:", addr, "key:", key)
-			// key := key
-			// tp.AddTask(func() {
-			// 	value, err := obj.db.reader.Storage(addr, key)
-			// 	if err != nil {
-			// 		log.Error("fail to fetch storage:", addr, key)
-			// 	}
-			// 	obj.originStorage[key] = value
-			// })
-			// }
+			accts <- StateObject{obj, keys}
 		})
 	}
 
-	tp.Stop()
+	// use channel to sync tasks
 	for range lenAccts {
-		obj := <-accts
+		state := <-accts
+		obj := state.obj
+		keys := state.keys
+		addr := obj.Address()
+
+		if obj.origin == nil {
+			continue
+		}
+
+		acct := obj.origin
+		tr, err := trie.NewStateTrie(trie.StorageTrieID(s.originalRoot, obj.addrHash, acct.Root), s.db.TrieDB())
+		if err != nil {
+			log.Error("fail to create trie for:", addr)
+			panic("fail to create trie for:")
+		}
+
+		storages := make(chan *StorageKV, len(keys))
+		for _, key := range keys {
+			key := key
+			tp.AddTask(func() {
+				val, err := obj.db.reader.StorageACL(addr, key, tr)
+				if err != nil {
+					log.Error("fail to fetch storage:", addr, key)
+				}
+				kv := &StorageKV{&key, &val}
+				storages <- kv
+			})
+		}
+
+		for range len(keys) {
+			s := <-storages
+			obj.originStorage[*s.key] = *s.val
+		}
+
 		s.setStateObject(obj)
+		close(storages)
 	}
 
+	tp.Stop()
 	close(accts)
 }
 

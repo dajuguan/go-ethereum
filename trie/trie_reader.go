@@ -64,6 +64,7 @@ func (r *trieReader) node(path []byte, hash common.Hash) ([]byte, error) {
 	if r.reader == nil {
 		return nil, &MissingNodeError{Owner: r.owner, NodeHash: hash, Path: path}
 	}
+	// fmt.Println("trieReader.node", r.owner.Hex(), hexutil.Encode(path), hash.Hex())
 	blob, err := r.reader.Node(r.owner, path, hash)
 	if err != nil || len(blob) == 0 {
 		return nil, &MissingNodeError{Owner: r.owner, NodeHash: hash, Path: path, err: err}
