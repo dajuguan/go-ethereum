@@ -134,7 +134,7 @@ func (dl *diskLayer) node(owner common.Hash, path []byte, depth int) ([]byte, co
 	} else {
 		blob = rawdb.ReadStorageTrieNode(dl.db.diskdb, owner, path)
 	}
-	if dl.nodes != nil && len(blob) > 0 {
+	if dl.nodes != nil && len(blob) > 0 && dl.db.nodeCacheOn {
 		dl.nodes.Set(key, blob)
 		cleanNodeWriteMeter.Mark(int64(len(blob)))
 	}

@@ -236,14 +236,25 @@ func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 
 	// for _, acl := range acls {
 	// 	addr := acl.Address
+	// 	if addr.Cmp(common.Address{100}) == -1 {
+	// 		continue
+	// 	}
 	// 	keys := acl.StorageKeys
+	// 	log.Info("fetch accout for", "addr:", addr.Hex())
 	// 	obj := s.getStateObject(addr)
+	// 	if obj == nil {
+	// 		continue
+	// 	}
 	// 	for _, key := range keys {
 	// 		log.Info("fetch storage for", "addr:", addr.Hex(), "key:", key.Hex())
 	// 		log.Info("hash:", "addr:", crypto.Keccak256Hash(addr[:]).Hex(), "key:", crypto.Keccak256Hash(key[:]).Hex())
 	// 		obj.db.reader.Storage(addr, key)
+	// 		panic("exit")
 	// 	}
 	// }
+
+	// currently, perf is better when cache is on
+	s.db.TrieDB().ToggleNodeCache(true)
 
 	type StateObject struct {
 		obj  *stateObject
@@ -323,6 +334,8 @@ func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 
 	tp.Stop()
 	close(accts)
+
+	s.db.TrieDB().ToggleNodeCache(true)
 }
 
 func init() {

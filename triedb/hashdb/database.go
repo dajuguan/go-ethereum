@@ -635,3 +635,7 @@ func (reader *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]
 func (db *Database) StateReader(root common.Hash) (database.StateReader, error) {
 	return nil, errors.New("not implemented")
 }
+
+func (db *Database) ToggleNodeCache(on bool) {
+
+}

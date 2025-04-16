@@ -193,11 +193,12 @@ type Database struct {
 	isVerkle bool       // Flag if database is used for verkle tree
 	hasher   nodeHasher // Trie node hasher
 
-	config  *Config                      // Configuration for database
-	diskdb  ethdb.Database               // Persistent storage for matured trie nodes
-	tree    *layerTree                   // The group for all known layers
-	freezer ethdb.ResettableAncientStore // Freezer for storing trie histories, nil possible in tests
-	lock    sync.RWMutex                 // Lock to prevent mutations from happening at the same time
+	config      *Config                      // Configuration for database
+	diskdb      ethdb.Database               // Persistent storage for matured trie nodes
+	tree        *layerTree                   // The group for all known layers
+	freezer     ethdb.ResettableAncientStore // Freezer for storing trie histories, nil possible in tests
+	lock        sync.RWMutex                 // Lock to prevent mutations from happening at the same time
+	nodeCacheOn bool
 }
 
 // New attempts to load an already existing layer from a persistent key-value
@@ -210,11 +211,12 @@ func New(diskdb ethdb.Database, config *Config, isVerkle bool) *Database {
 	config = config.sanitize()
 
 	db := &Database{
-		readOnly: config.ReadOnly,
-		isVerkle: isVerkle,
-		config:   config,
-		diskdb:   diskdb,
-		hasher:   merkleNodeHasher,
+		readOnly:    config.ReadOnly,
+		isVerkle:    isVerkle,
+		config:      config,
+		diskdb:      diskdb,
+		hasher:      merkleNodeHasher,
+		nodeCacheOn: true,
 	}
 	// Establish a dedicated database namespace tailored for verkle-specific
 	// data, ensuring the isolation of both verkle and merkle tree data. It's
@@ -581,4 +583,8 @@ func (db *Database) AccountIterator(root common.Hash, seek common.Hash) (Account
 // account. The iterator will be moved to the specific start position.
 func (db *Database) StorageIterator(root common.Hash, account common.Hash, seek common.Hash) (StorageIterator, error) {
 	return newFastStorageIterator(db, root, account, seek)
+}
+
+func (db *Database) ToggleNodeCache(on bool) {
+	db.nodeCacheOn = on
 }

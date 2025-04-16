@@ -77,6 +77,8 @@ type backend interface {
 
 	// Close closes the trie database backend and releases all held resources.
 	Close() error
+
+	ToggleNodeCache(on bool)
 }
 
 // Database is the wrapper of the underlying backend which is shared by different
@@ -320,4 +322,8 @@ func (db *Database) IsVerkle() bool {
 // Disk returns the underlying disk database.
 func (db *Database) Disk() ethdb.Database {
 	return db.disk
+}
+
+func (db *Database) ToggleNodeCache(on bool) {
+	db.backend.ToggleNodeCache(on)
 }
