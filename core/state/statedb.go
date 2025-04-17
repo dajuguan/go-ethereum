@@ -224,9 +224,30 @@ func (s *StateDB) StopPrefetcher() {
 	}
 }
 
+type StorageKV struct {
+	Key common.Hash `json:"key"`
+	Val common.Hash `json:"val"`
+}
+
+type AccessListKV struct {
+	Address   common.Address `json:"address"     gencodec:"required"`
+	StorageKV []StorageKV    `json:"storageKeys" gencodec:"required"`
+}
+
 var AllBlockAccessLists = map[uint64]types.AccessList{}
+var AllBlockAccessListKV = map[uint64][]AccessListKV{}
+
+const WithKV = true
 
 func (s *StateDB) PrefetchAccessList(blockNum uint64) {
+	if WithKV {
+		s.PrefetchAccessListWithKV(blockNum)
+	} else {
+		s.PrefetchAccessListWithoutKV(blockNum)
+	}
+}
+
+func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 	log.Info("PrefetchAccessList for", "block:", blockNum)
 	// parallelize the access list prefetching
 	acls := AllBlockAccessLists[blockNum]
@@ -338,19 +359,108 @@ func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 	s.db.TrieDB().ToggleNodeCache(true)
 }
 
+func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
+	log.Info("PrefetchAccessListKV for", "block:", blockNum)
+	// parallelize the access list prefetching
+	acls := AllBlockAccessListKV[blockNum]
+	if acls == nil {
+		return
+	}
+
+	// for _, acl := range acls {
+	// 	addr := acl.Address
+	// 	if addr.Cmp(common.Address{100}) == -1 {
+	// 		continue
+	// 	}
+	// 	keys := acl.StorageKeys
+	// 	log.Info("fetch accout for", "addr:", addr.Hex())
+	// 	obj := s.getStateObject(addr)
+	// 	if obj == nil {
+	// 		continue
+	// 	}
+	// 	for _, key := range keys {
+	// 		log.Info("fetch storage for", "addr:", addr.Hex(), "key:", key.Hex())
+	// 		log.Info("hash:", "addr:", crypto.Keccak256Hash(addr[:]).Hex(), "key:", crypto.Keccak256Hash(key[:]).Hex())
+	// 		obj.db.reader.Storage(addr, key)
+	// 		panic("exit")
+	// 	}
+	// }
+
+	// currently, perf is better when cache is on
+	s.db.TrieDB().ToggleNodeCache(true)
+
+	tp := NewThreadPool(25)
+	tp.Start()
+
+	lenAccts := 0
+	accts := make(chan *stateObject, len(acls))
+
+	for _, acl := range acls {
+		addr := acl.Address
+		if addr.Cmp(common.Address{100}) == -1 {
+			continue
+		}
+		lenAccts++
+		kvs := acl.StorageKV
+
+		tp.AddTask(func() {
+			// it'll trigger map caching in trie, which is not thread safe
+			acct, err := s.reader.AccountACL(addr)
+			if err != nil {
+				log.Error("fail to fetch account:", addr)
+			}
+			// Insert into the live set
+			obj := newObject(s, addr, acct)
+			if acct != nil {
+				for _, kv := range kvs {
+					obj.originStorage[kv.Key] = kv.Val
+				}
+			}
+			accts <- obj
+		})
+	}
+
+	// use channel to sync tasks
+	for range lenAccts {
+		obj := <-accts
+		s.setStateObject(obj)
+	}
+
+	tp.Stop()
+	close(accts)
+
+	s.db.TrieDB().ToggleNodeCache(true)
+}
+
 func init() {
 	// load the access lists for all blocks
-	log.Info("Importing access_lists.json")
-	data, err := os.ReadFile("access_lists.json")
-	if err != nil {
-		log.Error("Failed to load access lists", "err", err)
-		return
+	println("Importing ACL")
+	var fileName string
+	if WithKV {
+		fileName = "access_lists_kv.json"
+		data, err := os.ReadFile(fileName)
+		if err != nil {
+			log.Error("Failed to load access lists", "err", err)
+			return
+		}
+		if err := json.Unmarshal(data, &AllBlockAccessListKV); err != nil {
+			log.Error("Failed to unmarshal access lists", "err", err)
+			return
+		}
+	} else {
+		fileName = "access_lists.json"
+		data, err := os.ReadFile(fileName)
+		if err != nil {
+			log.Error("Failed to load access lists", "err", err)
+			return
+		}
+		if err := json.Unmarshal(data, &AllBlockAccessLists); err != nil {
+			log.Error("Failed to unmarshal access lists", "err", err)
+			return
+		}
 	}
-	if err := json.Unmarshal(data, &AllBlockAccessLists); err != nil {
-		log.Error("Failed to unmarshal access lists", "err", err)
-		return
-	}
-	log.Info("Imported access_lists.json")
+
+	println("Imported ACL", fileName)
 }
 
 // setError remembers the first non-nil error it is called with.
