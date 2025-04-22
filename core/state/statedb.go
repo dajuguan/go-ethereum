@@ -395,9 +395,11 @@ func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
 	lenAccts := 0
 	accts := make(chan *stateObject, len(acls))
 
+	precompileAddr := common.HexToAddress("0x0000000000000000000000000000000000000020")
+
 	for _, acl := range acls {
 		addr := acl.Address
-		if addr.Cmp(common.Address{100}) == -1 {
+		if addr.Cmp(precompileAddr) == -1 {
 			continue
 		}
 		lenAccts++
