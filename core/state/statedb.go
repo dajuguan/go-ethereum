@@ -250,17 +250,17 @@ func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 	log.Info("PrefetchAccessList for", "block:", blockNum)
 	// parallelize the access list prefetching
-	acls := AllBlockAccessLists[blockNum]
-	if acls == nil {
+	bals := AllBlockAccessLists[blockNum]
+	if bals == nil {
 		return
 	}
 
-	// for _, acl := range acls {
-	// 	addr := acl.Address
+	// for _, bal := range bals {
+	// 	addr := bal.Address
 	// 	if addr.Cmp(common.Address{100}) == -1 {
 	// 		continue
 	// 	}
-	// 	keys := acl.StorageKeys
+	// 	keys := bal.StorageKeys
 	// 	log.Info("fetch accout for", "addr:", addr.Hex())
 	// 	obj := s.getStateObject(addr)
 	// 	if obj == nil {
@@ -283,6 +283,7 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 	}
 
 	type StorageKV struct {
+		obj *stateObject
 		key *common.Hash
 		val *common.Hash
 	}
@@ -291,19 +292,21 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 	tp.Start()
 
 	lenAccts := 0
-	accts := make(chan StateObject, len(acls))
+	lenSlots := 0
+	accts := make(chan StateObject, len(bals))
 
-	for _, acl := range acls {
-		addr := acl.Address
+	for _, bal := range bals {
+		addr := bal.Address
 		if addr.Cmp(common.Address{100}) == -1 {
 			continue
 		}
 		lenAccts++
-		keys := acl.StorageKeys
+		keys := bal.StorageKeys
+		lenSlots += len(keys)
 
 		tp.AddTask(func() {
 			// it'll trigger map caching in trie, which is not thread safe
-			acct, err := s.reader.AccountACL(addr)
+			acct, err := s.reader.AccountBAL(addr)
 			if err != nil {
 				log.Error("fail to fetch account:", addr)
 			}
@@ -314,6 +317,7 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 	}
 
 	// use channel to sync tasks
+	storages := make(chan *StorageKV, lenSlots)
 	for range lenAccts {
 		state := <-accts
 		obj := state.obj
@@ -331,30 +335,29 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 			panic("fail to create trie for:")
 		}
 
-		storages := make(chan *StorageKV, len(keys))
 		for _, key := range keys {
 			key := key
 			tp.AddTask(func() {
-				val, err := obj.db.reader.StorageACL(addr, key, tr)
+				val, err := obj.db.reader.StorageBAL(addr, key, tr)
 				if err != nil {
 					log.Error("fail to fetch storage:", addr, key)
 				}
-				kv := &StorageKV{&key, &val}
+				kv := &StorageKV{obj, &key, &val}
 				storages <- kv
 			})
 		}
-
-		for range len(keys) {
-			s := <-storages
-			obj.originStorage[*s.key] = *s.val
-		}
-
-		s.setStateObject(obj)
-		close(storages)
 	}
 
 	tp.Stop()
+
+	for range lenSlots {
+		kv := <-storages
+		kv.obj.originStorage[*kv.key] = *kv.val
+		s.setStateObject(kv.obj)
+	}
+
 	close(accts)
+	close(storages)
 
 	s.db.TrieDB().ToggleNodeCache(true)
 }
@@ -362,29 +365,10 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
 	log.Info("PrefetchAccessListKV for", "block:", blockNum)
 	// parallelize the access list prefetching
-	acls := AllBlockAccessListKV[blockNum]
-	if acls == nil {
+	bals := AllBlockAccessListKV[blockNum]
+	if bals == nil {
 		return
 	}
-
-	// for _, acl := range acls {
-	// 	addr := acl.Address
-	// 	if addr.Cmp(common.Address{100}) == -1 {
-	// 		continue
-	// 	}
-	// 	keys := acl.StorageKeys
-	// 	log.Info("fetch accout for", "addr:", addr.Hex())
-	// 	obj := s.getStateObject(addr)
-	// 	if obj == nil {
-	// 		continue
-	// 	}
-	// 	for _, key := range keys {
-	// 		log.Info("fetch storage for", "addr:", addr.Hex(), "key:", key.Hex())
-	// 		log.Info("hash:", "addr:", crypto.Keccak256Hash(addr[:]).Hex(), "key:", crypto.Keccak256Hash(key[:]).Hex())
-	// 		obj.db.reader.Storage(addr, key)
-	// 		panic("exit")
-	// 	}
-	// }
 
 	// currently, perf is better when cache is on
 	s.db.TrieDB().ToggleNodeCache(true)
@@ -393,21 +377,20 @@ func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
 	tp.Start()
 
 	lenAccts := 0
-	accts := make(chan *stateObject, len(acls))
+	accts := make(chan *stateObject, len(bals))
 
-	precompileAddr := common.HexToAddress("0x0000000000000000000000000000000000000020")
-
-	for _, acl := range acls {
-		addr := acl.Address
-		if addr.Cmp(precompileAddr) == -1 {
-			continue
+	preCompiledAddr := common.HexToAddress("0x0000000000000000000000000000000000000020")
+	for _, bal := range bals {
+		addr := bal.Address
+		if addr.Cmp(preCompiledAddr) == -1 {
+			s.createObject(addr)
 		}
 		lenAccts++
-		kvs := acl.StorageKV
+		kvs := bal.StorageKV
 
 		tp.AddTask(func() {
 			// it'll trigger map caching in trie, which is not thread safe
-			acct, err := s.reader.AccountACL(addr)
+			acct, err := s.reader.AccountBAL(addr)
 			if err != nil {
 				log.Error("fail to fetch account:", addr)
 			}
@@ -427,6 +410,7 @@ func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
 		obj := <-accts
 		s.setStateObject(obj)
 	}
+	s.createObject(params.SystemAddress)
 
 	tp.Stop()
 	close(accts)
@@ -436,10 +420,10 @@ func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
 
 func init() {
 	// load the access lists for all blocks
-	println("Importing ACL")
+	println("Importing BAL")
 	var fileName string
 	if WithKV {
-		fileName = "access_lists_kv.json"
+		fileName = "access_lists_kv.2000.json"
 		data, err := os.ReadFile(fileName)
 		if err != nil {
 			log.Error("Failed to load access lists", "err", err)
@@ -450,7 +434,7 @@ func init() {
 			return
 		}
 	} else {
-		fileName = "access_lists.json"
+		fileName = "access_lists.500.json"
 		data, err := os.ReadFile(fileName)
 		if err != nil {
 			log.Error("Failed to load access lists", "err", err)
@@ -462,7 +446,7 @@ func init() {
 		}
 	}
 
-	println("Imported ACL", fileName)
+	println("Imported BAL", fileName)
 }
 
 // setError remembers the first non-nil error it is called with.

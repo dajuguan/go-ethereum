@@ -58,7 +58,7 @@ type StateReader interface {
 	// - Returns an error only if an unexpected issue occurs
 	// - The returned account is safe to modify after the call
 	Account(addr common.Address) (*types.StateAccount, error)
-	AccountACL(addr common.Address) (*types.StateAccount, error)
+	AccountBAL(addr common.Address) (*types.StateAccount, error)
 
 	// Storage retrieves the storage slot associated with a particular account
 	// address and slot key.
@@ -67,7 +67,7 @@ type StateReader interface {
 	// - Returns an error only if an unexpected issue occurs
 	// - The returned storage slot is safe to modify after the call
 	Storage(addr common.Address, slot common.Hash) (common.Hash, error)
-	StorageACL(addr common.Address, slot common.Hash, tr *trie.StateTrie) (common.Hash, error)
+	StorageBAL(addr common.Address, slot common.Hash, tr *trie.StateTrie) (common.Hash, error)
 }
 
 // Reader defines the interface for accessing accounts, storage slots and contract
@@ -169,7 +169,7 @@ func (r *flatReader) Account(addr common.Address) (*types.StateAccount, error) {
 	return acct, nil
 }
 
-func (r *flatReader) AccountACL(addr common.Address) (*types.StateAccount, error) {
+func (r *flatReader) AccountBAL(addr common.Address) (*types.StateAccount, error) {
 	return r.Account(addr)
 }
 
@@ -203,7 +203,7 @@ func (r *flatReader) Storage(addr common.Address, key common.Hash) (common.Hash,
 	return value, nil
 }
 
-func (r *flatReader) StorageACL(addr common.Address, key common.Hash, tr *trie.StateTrie) (common.Hash, error) {
+func (r *flatReader) StorageBAL(addr common.Address, key common.Hash, tr *trie.StateTrie) (common.Hash, error) {
 	return r.Storage(addr, key)
 }
 
@@ -260,7 +260,7 @@ func (r *trieReader) Account(addr common.Address) (*types.StateAccount, error) {
 	return account, nil
 }
 
-func (r *trieReader) AccountACL(addr common.Address) (*types.StateAccount, error) {
+func (r *trieReader) AccountBAL(addr common.Address) (*types.StateAccount, error) {
 	account, err := r.mainTrie.GetAccount(addr)
 	if err != nil {
 		return nil, err
@@ -311,7 +311,7 @@ func (r *trieReader) Storage(addr common.Address, key common.Hash) (common.Hash,
 	return value, nil
 }
 
-func (r *trieReader) StorageACL(addr common.Address, key common.Hash, tr *trie.StateTrie) (common.Hash, error) {
+func (r *trieReader) StorageBAL(addr common.Address, key common.Hash, tr *trie.StateTrie) (common.Hash, error) {
 	ret, err := tr.GetStorage(addr, key.Bytes())
 	if err != nil {
 		return common.Hash{}, err
@@ -357,10 +357,10 @@ func (r *multiStateReader) Account(addr common.Address) (*types.StateAccount, er
 	return nil, errors.Join(errs...)
 }
 
-func (r *multiStateReader) AccountACL(addr common.Address) (*types.StateAccount, error) {
+func (r *multiStateReader) AccountBAL(addr common.Address) (*types.StateAccount, error) {
 	var errs []error
 	for _, reader := range r.readers {
-		acct, err := reader.AccountACL(addr)
+		acct, err := reader.AccountBAL(addr)
 		if err == nil {
 			return acct, nil
 		}
@@ -387,10 +387,10 @@ func (r *multiStateReader) Storage(addr common.Address, slot common.Hash) (commo
 	return common.Hash{}, errors.Join(errs...)
 }
 
-func (r *multiStateReader) StorageACL(addr common.Address, slot common.Hash, tr *trie.StateTrie) (common.Hash, error) {
+func (r *multiStateReader) StorageBAL(addr common.Address, slot common.Hash, tr *trie.StateTrie) (common.Hash, error) {
 	var errs []error
 	for _, reader := range r.readers {
-		slot, err := reader.StorageACL(addr, slot, tr)
+		slot, err := reader.StorageBAL(addr, slot, tr)
 		if err == nil {
 			return slot, nil
 		}

@@ -19,6 +19,7 @@ package core
 import (
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -54,6 +55,13 @@ func NewStateProcessor(config *params.ChainConfig, chain *HeaderChain) *StatePro
 // Process returns the receipts and logs accumulated during the process and
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
+
+var IoTime = time.Duration(0)
+var ExeTime = time.Duration(0)
+var AcctTime = time.Duration(0)
+var StorageTime = time.Duration(0)
+var CommitTime = time.Duration(0)
+
 func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (*ProcessResult, error) {
 	var (
 		receipts    types.Receipts
@@ -65,8 +73,14 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		gp          = new(GasPool).AddGas(block.GasLimit())
 	)
 
+	ioStart := time.Now()
 	statedb.PrefetchAccessList(block.Number().Uint64())
+	ioDiff := time.Since(ioStart)
+	IoTime += ioDiff
 
+	fmt.Println("DBReadsBefore:", statedb.AccountLoaded, statedb.AccountReads, statedb.StorageLoaded, statedb.StorageReads)
+
+	exeStart := time.Now()
 	// Mutate the block and state according to any hard-fork specs
 	if p.config.DAOForkSupport && p.config.DAOForkBlock != nil && p.config.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(statedb)
@@ -120,8 +134,18 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		ProcessConsolidationQueue(&requests, evm)
 	}
 
+	exeDiff := time.Since(exeStart)
+	ExeTime += exeDiff
+
+	commitStart := time.Now()
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
 	p.chain.engine.Finalize(p.chain, header, tracingStateDB, block.Body())
+	commitDiff := time.Since(commitStart)
+	CommitTime += commitDiff
+
+	fmt.Println("DBReadsAfter:", statedb.AccountLoaded, statedb.AccountReads, statedb.StorageLoaded, statedb.StorageReads)
+	AcctTime += statedb.AccountReads
+	StorageTime += statedb.StorageReads
 
 	return &ProcessResult{
 		Receipts: receipts,
