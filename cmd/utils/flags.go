@@ -271,6 +271,12 @@ var (
 		Value:    ethconfig.Defaults.StateHistory,
 		Category: flags.StateCategory,
 	}
+	BALFlag = &cli.BoolFlag{
+		Name:     "bal",
+		Usage:    "enable block level access lists",
+		Value:    true,
+		Category: flags.StateCategory,
+	}
 	TransactionHistoryFlag = &cli.Uint64Flag{
 		Name:     "history.transactions",
 		Usage:    "Number of recent blocks to maintain transactions index for (default = about one year, 0 = entire chain)",
