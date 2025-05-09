@@ -197,6 +197,20 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	}
 	s.db.StorageReads += time.Since(start)
 
+	// save to bal storage keys
+	switch balType {
+	case BalKeyConstruction:
+		{
+			bal := AllBlockAccessLists[s.db.blockNumber]
+			for i, val := range bal {
+				if val.Address == s.address {
+					keys := val.StorageKeys
+					bal[i].StorageKeys = append(keys, key)
+					break
+				}
+			}
+		}
+	}
 	// Schedule the resolved storage slots for prefetching if it's enabled.
 	if s.db.prefetcher != nil && s.data.Root != types.EmptyRootHash {
 		if err = s.db.prefetcher.prefetch(s.addrHash, s.origin.Root, s.address, nil, []common.Hash{key}, true); err != nil {

@@ -157,6 +157,8 @@ type StateDB struct {
 	StorageLoaded  int          // Number of storage slots retrieved from the database during the state transition
 	StorageUpdated atomic.Int64 // Number of storage slots updated during the state transition
 	StorageDeleted atomic.Int64 // Number of storage slots deleted during the state transition
+
+	blockNumber uint64
 }
 
 // New creates a new state from a given trie.
@@ -237,13 +239,26 @@ type AccessListKV struct {
 var AllBlockAccessLists = map[uint64]types.AccessList{}
 var AllBlockAccessListKV = map[uint64][]AccessListKV{}
 
-const WithKV = true
+type BALType int
+
+const (
+	OnlyKey BALType = iota
+	WithKV
+	BalKeyConstruction
+)
+
+const balType = OnlyKey
 
 func (s *StateDB) PrefetchAccessList(blockNum uint64) {
-	if WithKV {
-		s.PrefetchAccessListWithKV(blockNum)
-	} else {
+	s.blockNumber = blockNum
+
+	switch balType {
+	case OnlyKey:
 		s.PrefetchAccessListWithoutKV(blockNum)
+	case WithKV:
+		s.PrefetchAccessListWithKV(blockNum)
+	case BalKeyConstruction:
+		return
 	}
 }
 
@@ -418,31 +433,55 @@ func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
 	s.db.TrieDB().ToggleNodeCache(true)
 }
 
+func SaveToJson() {
+	fileName := "/root/test_nodes/ethereum/execution/access_lists.100.json"
+	file, err := os.Create(fileName)
+	if err != nil {
+		log.Error("Failed to create JSON file: %v", err)
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(AllBlockAccessLists); err != nil {
+		log.Error("Failed to write JSON file: %v", err)
+	}
+}
+
 func init() {
 	// load the access lists for all blocks
 	println("Importing BAL")
 	var fileName string
-	if WithKV {
-		fileName = "access_lists_kv.2000.json"
-		data, err := os.ReadFile(fileName)
-		if err != nil {
-			log.Error("Failed to load access lists", "err", err)
-			return
+	switch balType {
+	case WithKV:
+		{
+			fileName = "access_lists_kv.2000.json"
+			data, err := os.ReadFile(fileName)
+			if err != nil {
+				log.Error("Failed to load access lists", "err", err)
+				return
+			}
+			if err := json.Unmarshal(data, &AllBlockAccessListKV); err != nil {
+				log.Error("Failed to unmarshal access lists", "err", err)
+				return
+			}
 		}
-		if err := json.Unmarshal(data, &AllBlockAccessListKV); err != nil {
-			log.Error("Failed to unmarshal access lists", "err", err)
-			return
+	case OnlyKey:
+		{
+			fileName = "access_lists.500.json"
+			data, err := os.ReadFile(fileName)
+			if err != nil {
+				log.Error("Failed to load access lists", "err", err)
+				return
+			}
+			if err := json.Unmarshal(data, &AllBlockAccessLists); err != nil {
+				log.Error("Failed to unmarshal access lists", "err", err)
+				return
+			}
 		}
-	} else {
-		fileName = "access_lists.500.json"
-		data, err := os.ReadFile(fileName)
-		if err != nil {
-			log.Error("Failed to load access lists", "err", err)
-			return
-		}
-		if err := json.Unmarshal(data, &AllBlockAccessLists); err != nil {
-			log.Error("Failed to unmarshal access lists", "err", err)
-			return
+	case BalKeyConstruction:
+		{
+
 		}
 	}
 
@@ -814,6 +853,17 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	}
 	s.AccountReads += time.Since(start)
 
+	// save to bal addrs
+	switch balType {
+	case BalKeyConstruction:
+		{
+			_, ok := AllBlockAccessLists[s.blockNumber]
+			if !ok {
+				bal := AllBlockAccessLists[s.blockNumber]
+				AllBlockAccessLists[s.blockNumber] = append(bal, types.AccessTuple{Address: addr})
+			}
+		}
+	}
 	// Short circuit if the account is not found
 	if acct == nil {
 		return nil
