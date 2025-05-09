@@ -43,6 +43,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/urfave/cli/v2"
 )
 
@@ -342,6 +343,7 @@ func importChain(ctx *cli.Context) error {
 			}
 		}
 	}
+	state.SaveToJson()
 	chain.Stop()
 	fmt.Printf("Import done in %v.\n\n", time.Since(start))
 
@@ -420,6 +422,13 @@ func showMetrics() {
 
 	// total
 	fmt.Println("blockInsertTimer", blockInsertTimer.Total())
+
+	fmt.Println("account trie I/O depth", trie.AcctTrieDepth)
+	fmt.Println("storage trie I/O depth", trie.StorageTrieDepth)
+
+	fmt.Println("IO time:", core.IoTime, "ExeTime:", core.ExeTime)
+	fmt.Println("Acct Prefetch:", core.AcctPrefetchTime, "Storage Prefetch:", core.StoragePrefetchTime, "Total:", state.TotalPrefetchTime)
+	fmt.Println("IO Acct:", core.AcctTime, "Storage:", core.StorageTime, "Total IO:", core.AcctTime+core.StorageTime, "Commit:", core.CommitTime)
 }
 
 func exportChain(ctx *cli.Context) error {

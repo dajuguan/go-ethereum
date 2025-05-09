@@ -17,6 +17,8 @@
 package trie
 
 import (
+	"sync"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -101,15 +103,45 @@ func (t *StateTrie) MustGet(key []byte) []byte {
 	return t.trie.MustGet(t.hashKey(key))
 }
 
+// Metric for counting trie I/O depth
+var AcctTrieDepth = SafeMap{m: make(map[int]int)}
+var StorageTrieDepth = SafeMap{m: make(map[int]int)}
+
+type SafeMap struct {
+	mu sync.RWMutex
+	m  map[int]int
+}
+
+func (sm *SafeMap) Get(key int) (int, bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	val, ok := sm.m[key]
+	return val, ok
+}
+
+func (sm *SafeMap) Set(key int, value int) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.m[key] = value
+}
+
 // GetStorage attempts to retrieve a storage slot with provided account address
 // and slot key. The value bytes must not be modified by the caller.
 // If the specified storage slot is not in the trie, nil will be returned.
 // If a trie node is not found in the database, a MissingNodeError is returned.
 func (t *StateTrie) GetStorage(_ common.Address, key []byte) ([]byte, error) {
 	enc, err := t.trie.Get(crypto.Keccak256(key))
+	// enc, err, depth := t.trie.GetWithDepth(crypto.Keccak256(key))
 	if err != nil || len(enc) == 0 {
 		return nil, err
 	}
+
+	// v := 0
+	// if val, ok := StorageTrieDepth.Get(depth); ok {
+	// 	v = val
+	// }
+	// StorageTrieDepth.Set(depth, v+1)
+
 	_, content, _, err := rlp.Split(enc)
 	return content, err
 }
@@ -118,11 +150,18 @@ func (t *StateTrie) GetStorage(_ common.Address, key []byte) ([]byte, error) {
 // If the specified account is not in the trie, nil will be returned.
 // If a trie node is not found in the database, a MissingNodeError is returned.
 func (t *StateTrie) GetAccount(address common.Address) (*types.StateAccount, error) {
-	// res, err := t.trie.Get(t.hashKey(address.Bytes()))
 	res, err := t.trie.Get(crypto.Keccak256(address.Bytes()))
+	// res, err, depth := t.trie.GetWithDepth(crypto.Keccak256(address.Bytes()))
 	if res == nil || err != nil {
 		return nil, err
 	}
+
+	// v := 0
+	// if val, ok := AcctTrieDepth.Get(depth); ok {
+	// 	v = val
+	// }
+	// AcctTrieDepth.Set(depth, v+1)
+
 	ret := new(types.StateAccount)
 	err = rlp.DecodeBytes(res, ret)
 	return ret, err

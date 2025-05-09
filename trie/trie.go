@@ -156,6 +156,55 @@ func (t *Trie) Get(key []byte) ([]byte, error) {
 	return value, err
 }
 
+func (t *Trie) GetWithDepth(key []byte) ([]byte, error, int) {
+	// Short circuit if the trie is already committed and not usable.
+	if t.committed {
+		return nil, ErrCommitted, 0
+	}
+	depth := 0
+	value, newroot, didResolve, err := t.getWithDepth(t.root, keybytesToHex(key), 0, &depth)
+	if err == nil && didResolve {
+		t.root = newroot
+	}
+	return value, err, depth
+}
+
+func (t *Trie) getWithDepth(origNode node, key []byte, pos int, depth *int) (value []byte, newnode node, didResolve bool, err error) {
+	switch n := (origNode).(type) {
+	case nil:
+		return nil, nil, false, nil
+	case valueNode:
+		return n, n, false, nil
+	case *shortNode:
+		if !bytes.HasPrefix(key[pos:], n.Key) {
+			// key not found in trie
+			return nil, n, false, nil
+		}
+		value, newnode, didResolve, err = t.getWithDepth(n.Val, key, pos+len(n.Key), depth)
+		if err == nil && didResolve {
+			n.Val = newnode
+		}
+		return value, n, didResolve, err
+	case *fullNode:
+		value, newnode, didResolve, err = t.getWithDepth(n.Children[key[pos]], key, pos+1, depth)
+		if err == nil && didResolve {
+			n.Children[key[pos]] = newnode
+		}
+		return value, n, didResolve, err
+	case hashNode:
+		// read a node from database
+		*depth += 1
+		child, err := t.resolveAndTrack(n, key[:pos])
+		if err != nil {
+			return nil, n, true, err
+		}
+		value, newnode, _, err := t.getWithDepth(child, key, pos, depth)
+		return value, newnode, true, err
+	default:
+		panic(fmt.Sprintf("%T: invalid node: %v", origNode, origNode))
+	}
+}
+
 func (t *Trie) get(origNode node, key []byte, pos int) (value []byte, newnode node, didResolve bool, err error) {
 	switch n := (origNode).(type) {
 	case nil:

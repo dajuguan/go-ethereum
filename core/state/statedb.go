@@ -233,6 +233,10 @@ type StorageKV struct {
 
 type AccessListKV struct {
 	Address   common.Address `json:"address"     gencodec:"required"`
+	Nonce     uint64         `json:"nonce"`
+	Balance   uint256.Int    `json:"balance"`
+	Root      common.Hash    `json:"root"`
+	CodeHash  []byte         `json:"codeHash"`
 	StorageKV []StorageKV    `json:"storageKeys" gencodec:"required"`
 }
 
@@ -243,7 +247,8 @@ type BALType int
 
 const (
 	OnlyKey BALType = iota
-	WithKV
+	WithAddrKeySlotV
+	WithAllKV
 	BalKeyConstruction
 )
 
@@ -251,16 +256,19 @@ const balType = OnlyKey
 
 func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 	s.blockNumber = blockNum
-
 	switch balType {
 	case OnlyKey:
 		s.PrefetchAccessListWithoutKV(blockNum)
-	case WithKV:
+	case WithAddrKeySlotV:
 		s.PrefetchAccessListWithKV(blockNum)
+	case WithAllKV:
+		s.PrefetchAccessListWithAllKV(blockNum)
 	case BalKeyConstruction:
 		return
 	}
 }
+
+var TotalPrefetchTime = time.Duration(0)
 
 func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 	log.Info("PrefetchAccessList for", "block:", blockNum)
@@ -269,28 +277,8 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 	if bals == nil {
 		return
 	}
-
-	// for _, bal := range bals {
-	// 	addr := bal.Address
-	// 	if addr.Cmp(common.Address{100}) == -1 {
-	// 		continue
-	// 	}
-	// 	keys := bal.StorageKeys
-	// 	log.Info("fetch accout for", "addr:", addr.Hex())
-	// 	obj := s.getStateObject(addr)
-	// 	if obj == nil {
-	// 		continue
-	// 	}
-	// 	for _, key := range keys {
-	// 		log.Info("fetch storage for", "addr:", addr.Hex(), "key:", key.Hex())
-	// 		log.Info("hash:", "addr:", crypto.Keccak256Hash(addr[:]).Hex(), "key:", crypto.Keccak256Hash(key[:]).Hex())
-	// 		obj.db.reader.Storage(addr, key)
-	// 		panic("exit")
-	// 	}
-	// }
-
 	// currently, perf is better when cache is on
-	s.db.TrieDB().ToggleNodeCache(true)
+	// s.db.TrieDB().ToggleNodeCache(true)
 
 	type StateObject struct {
 		obj  *stateObject
@@ -307,20 +295,19 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 	tp.Start()
 
 	lenAccts := 0
-	lenSlots := 0
+	lenMaxSlots := 0
 	accts := make(chan StateObject, len(bals))
+
+	accountReadStart := time.Now()
 
 	for _, bal := range bals {
 		addr := bal.Address
-		if addr.Cmp(common.Address{100}) == -1 {
-			continue
-		}
 		lenAccts++
 		keys := bal.StorageKeys
-		lenSlots += len(keys)
+		lenMaxSlots += len(keys)
 
 		tp.AddTask(func() {
-			// it'll trigger map caching in trie, which is not thread safe
+			// it'll trigger map caching in trie, which is not thread safe before due to keccakhash
 			acct, err := s.reader.AccountBAL(addr)
 			if err != nil {
 				log.Error("fail to fetch account:", addr)
@@ -332,9 +319,20 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 	}
 
 	// use channel to sync tasks
-	storages := make(chan *StorageKV, lenSlots)
+	acctsArr := []StateObject{}
 	for range lenAccts {
 		state := <-accts
+		acctsArr = append(acctsArr, state)
+		// must set it first to avoid accounts read later in storageBAL
+		s.setStateObject(state.obj)
+	}
+	close(accts)
+	s.AccountReads += time.Since(accountReadStart)
+
+	storages := make(chan *StorageKV, lenMaxSlots)
+	lenSlots := 0
+	storageReadStart := time.Now()
+	for _, state := range acctsArr {
 		obj := state.obj
 		keys := state.keys
 		addr := obj.Address()
@@ -342,6 +340,8 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 		if obj.origin == nil {
 			continue
 		}
+
+		lenSlots += len(keys)
 
 		acct := obj.origin
 		tr, err := trie.NewStateTrie(trie.StorageTrieID(s.originalRoot, obj.addrHash, acct.Root), s.db.TrieDB())
@@ -362,19 +362,18 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 			})
 		}
 	}
-
 	tp.Stop()
+	s.StorageReads += time.Since(storageReadStart)
 
 	for range lenSlots {
 		kv := <-storages
 		kv.obj.originStorage[*kv.key] = *kv.val
 		s.setStateObject(kv.obj)
 	}
-
-	close(accts)
 	close(storages)
+	s.createObject(params.SystemAddress)
 
-	s.db.TrieDB().ToggleNodeCache(true)
+	TotalPrefetchTime += time.Since(accountReadStart)
 }
 
 func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
@@ -394,17 +393,14 @@ func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
 	lenAccts := 0
 	accts := make(chan *stateObject, len(bals))
 
-	preCompiledAddr := common.HexToAddress("0x0000000000000000000000000000000000000020")
+	accountReadStart := time.Now()
 	for _, bal := range bals {
 		addr := bal.Address
-		if addr.Cmp(preCompiledAddr) == -1 {
-			s.createObject(addr)
-		}
 		lenAccts++
 		kvs := bal.StorageKV
 
 		tp.AddTask(func() {
-			// it'll trigger map caching in trie, which is not thread safe
+			// it'll trigger map caching in trie, which is not thread safe before due to keccakhash
 			acct, err := s.reader.AccountBAL(addr)
 			if err != nil {
 				log.Error("fail to fetch account:", addr)
@@ -420,21 +416,152 @@ func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
 		})
 	}
 
+	newBals := []AccessListKV{}
 	// use channel to sync tasks
 	for range lenAccts {
 		obj := <-accts
 		s.setStateObject(obj)
+
+		// save root to BAL: only for debug usage
+		if obj.origin != nil {
+			var bal AccessListKV
+			for _, item := range bals {
+				if item.Address == obj.address {
+					bal = item
+					break
+				}
+			}
+			bal.Root = obj.Root()
+			bal.Balance = *obj.Balance()
+			bal.Nonce = obj.Nonce()
+			bal.CodeHash = obj.CodeHash()
+			newBals = append(newBals, bal)
+		}
 	}
+	s.AccountReads += time.Since(accountReadStart)
 	s.createObject(params.SystemAddress)
 
 	tp.Stop()
 	close(accts)
 
 	s.db.TrieDB().ToggleNodeCache(true)
+
+	// save bal with root to a JSON file: only for debug usage
+	AllBlockAccessListKV[blockNum] = newBals
 }
 
-func SaveToJson() {
-	fileName := "/root/test_nodes/ethereum/execution/access_lists.100.json"
+func (s *StateDB) PrefetchAccessListWithAllKV(blockNum uint64) {
+	// parallelize the access list prefetching
+	bals := AllBlockAccessListKV[blockNum]
+	if bals == nil {
+		return
+	}
+	log.Info("PrefetchAccessListKV for", "block:", blockNum)
+	for _, bal := range bals {
+		addr := bal.Address
+		kvs := bal.StorageKV
+
+		// skip if account is EOA with 0 balance or newly created contract
+		// !(bal.Balance.IsZero() && bal.CodeHash == nil) &&
+		acct := types.StateAccount{
+			Nonce:    bal.Nonce,
+			Balance:  &bal.Balance,
+			CodeHash: bal.CodeHash,
+			Root:     bal.Root,
+		}
+
+		obj := newObject(s, addr, &acct)
+		for _, kv := range kvs {
+			obj.originStorage[kv.Key] = kv.Val
+		}
+		s.setStateObject(obj)
+	}
+	s.createObject(params.SystemAddress)
+}
+
+type AcctChan struct {
+	addr common.Address
+	acct *types.StateAccount
+}
+
+var tp *ThreadPool
+
+func (s *StateDB) PrefetchAcctTrie(blockNum uint64) {
+	bals := AllBlockAccessListKV[blockNum]
+	if bals == nil || balType != WithAllKV {
+		return
+	}
+
+	go func() {
+		for _, bal := range bals {
+			addr := bal.Address
+			tp.AddTask(func() {
+				// trigger trie caching(nodeCacheOn)
+				s.reader.AccountBAL(addr)
+			})
+		}
+	}()
+}
+
+func (s *StateDB) GetPreStorageRoot(blockNum uint64) chan *AcctChan {
+	bals := AllBlockAccessListKV[blockNum]
+	if bals == nil {
+		return nil
+	}
+	s.db.TrieDB().ToggleNodeCache(true)
+	accts := make(chan *AcctChan, len(bals))
+	// sync accts with channel
+	preCompiledAddr := common.HexToAddress("0x0000000000000000000000000000000000000020")
+	// go func() {
+	//  for _, bal := range bals {
+	//      addr := bal.Address
+	//      if addr.Cmp(preCompiledAddr) == -1 {
+	//          accts <- &AcctChan{addr, nil}
+	//          continue
+	//      }
+	//      acct, _ := s.reader.AccountBAL(addr)
+	//      accts <- &AcctChan{addr, acct}
+	//  }
+	// }()
+
+	tp := NewThreadPool(2)
+	tp.Start()
+
+	for _, bal := range bals {
+		addr := bal.Address
+		if addr.Cmp(preCompiledAddr) == -1 {
+			accts <- &AcctChan{addr, nil}
+			continue
+		}
+		tp.AddTask(func() {
+			acct, _ := s.reader.AccountBAL(addr)
+			accts <- &AcctChan{addr, acct}
+		})
+	}
+	s.db.TrieDB().ToggleNodeCache(true)
+	return accts
+}
+
+func (s *StateDB) SetPreStorageRoot(blockNum uint64, accts chan *AcctChan) {
+	bals := AllBlockAccessListKV[blockNum]
+	if bals == nil || accts == nil {
+		return
+	}
+	// setPreStorageRoot
+	for range len(bals) {
+		acctObj := <-accts
+		addr := acctObj.addr
+		obj := s.getStateObject(addr)
+		acct := acctObj.acct
+		if acct != nil {
+			obj.origin.Root = acct.Root
+			obj.data.Root = acct.Root
+		}
+	}
+}
+
+func SaveKToJson() {
+	fileName := "access_lists.100.json"
 	file, err := os.Create(fileName)
 	if err != nil {
 		log.Error("Failed to create JSON file: %v", err)
@@ -448,13 +575,47 @@ func SaveToJson() {
 	}
 }
 
+func SaveAVKVToJson() {
+	if balType != WithAddrKeySlotV {
+		return
+	}
+	fileName := "access_lists_kv_root.json"
+	file, err := os.Create("./" + fileName)
+	if err != nil {
+		log.Error("Failed to create JSON file: %v", err)
+	}
+	defer file.Close()
+
+	data := AllBlockAccessListKV
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(data); err != nil {
+		log.Error("Failed to write JSON file: %v", err)
+	}
+}
+
 func init() {
 	// load the access lists for all blocks
 	println("Importing BAL")
 	var fileName string
 	switch balType {
-	case WithKV:
+	case OnlyKey:
 		{
+			println("bal onlykey")
+			fileName = "access_lists.2000.json"
+			data, err := os.ReadFile(fileName)
+			if err != nil {
+				log.Error("Failed to load access lists", "err", err)
+				return
+			}
+			if err := json.Unmarshal(data, &AllBlockAccessLists); err != nil {
+				log.Error("Failed to unmarshal access lists", "err", err)
+				return
+			}
+		}
+	case WithAddrKeySlotV:
+		{
+			println("bal addrKeySlotV")
 			fileName = "access_lists_kv.2000.json"
 			data, err := os.ReadFile(fileName)
 			if err != nil {
@@ -466,22 +627,25 @@ func init() {
 				return
 			}
 		}
-	case OnlyKey:
+	case WithAllKV:
 		{
-			fileName = "access_lists.500.json"
+			println("bal allKV")
+			fileName = "access_lists_kv_root.json"
 			data, err := os.ReadFile(fileName)
 			if err != nil {
 				log.Error("Failed to load access lists", "err", err)
 				return
 			}
-			if err := json.Unmarshal(data, &AllBlockAccessLists); err != nil {
+			if err := json.Unmarshal(data, &AllBlockAccessListKV); err != nil {
 				log.Error("Failed to unmarshal access lists", "err", err)
 				return
 			}
+
+			tp = NewThreadPool(40)
+			tp.Start()
 		}
 	case BalKeyConstruction:
 		{
-
 		}
 	}
 

@@ -188,7 +188,6 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 		return common.Hash{}
 	}
 	s.db.StorageLoaded++
-
 	start := time.Now()
 	value, err := s.db.reader.Storage(s.address, key)
 	if err != nil {

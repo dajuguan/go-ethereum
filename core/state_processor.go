@@ -61,6 +61,8 @@ var ExeTime = time.Duration(0)
 var AcctTime = time.Duration(0)
 var StorageTime = time.Duration(0)
 var CommitTime = time.Duration(0)
+var AcctPrefetchTime = time.Duration(0)
+var StoragePrefetchTime = time.Duration(0)
 
 func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (*ProcessResult, error) {
 	var (
@@ -79,6 +81,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	IoTime += ioDiff
 
 	fmt.Println("DBReadsBefore:", statedb.AccountLoaded, statedb.AccountReads, statedb.StorageLoaded, statedb.StorageReads)
+	AcctPrefetchTime += statedb.AccountReads
+	StoragePrefetchTime += statedb.StorageReads
+
+	statedb.PrefetchAcctTrie(block.Number().Uint64())
 
 	exeStart := time.Now()
 	// Mutate the block and state according to any hard-fork specs
