@@ -234,7 +234,7 @@ type StorageKV struct {
 type AccessListKV struct {
 	Address   common.Address `json:"address"     gencodec:"required"`
 	Nonce     uint64         `json:"nonce"`
-	Balance   uint256.Int    `json:"balance"`
+	Balance   *uint256.Int   `json:"balance"`
 	Root      common.Hash    `json:"root"`
 	CodeHash  []byte         `json:"codeHash"`
 	StorageKV []StorageKV    `json:"storageKeys" gencodec:"required"`
@@ -250,12 +250,14 @@ const (
 	WithAddrKeySlotV
 	WithAllKV
 	BalKeyConstruction
+	BalKeyValConstruction
 )
 
-const balType = OnlyKey
+const balType = WithAllKV
 
 func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 	s.blockNumber = blockNum
+
 	switch balType {
 	case OnlyKey:
 		s.PrefetchAccessListWithoutKV(blockNum)
@@ -264,6 +266,7 @@ func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 	case WithAllKV:
 		s.PrefetchAccessListWithAllKV(blockNum)
 	case BalKeyConstruction:
+	case BalKeyValConstruction:
 		return
 	}
 }
@@ -271,12 +274,13 @@ func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 var TotalPrefetchTime = time.Duration(0)
 
 func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
-	log.Info("PrefetchAccessList for", "block:", blockNum)
 	// parallelize the access list prefetching
 	bals := AllBlockAccessLists[blockNum]
 	if bals == nil {
 		return
 	}
+	log.Info("PrefetchAccessListOnlyKey for", "block:", blockNum)
+
 	// currently, perf is better when cache is on
 	// s.db.TrieDB().ToggleNodeCache(true)
 
@@ -340,7 +344,6 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 		if obj.origin == nil {
 			continue
 		}
-
 		lenSlots += len(keys)
 
 		acct := obj.origin
@@ -416,27 +419,10 @@ func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
 		})
 	}
 
-	newBals := []AccessListKV{}
 	// use channel to sync tasks
 	for range lenAccts {
 		obj := <-accts
 		s.setStateObject(obj)
-
-		// save root to BAL: only for debug usage
-		if obj.origin != nil {
-			var bal AccessListKV
-			for _, item := range bals {
-				if item.Address == obj.address {
-					bal = item
-					break
-				}
-			}
-			bal.Root = obj.Root()
-			bal.Balance = *obj.Balance()
-			bal.Nonce = obj.Nonce()
-			bal.CodeHash = obj.CodeHash()
-			newBals = append(newBals, bal)
-		}
 	}
 	s.AccountReads += time.Since(accountReadStart)
 	s.createObject(params.SystemAddress)
@@ -445,10 +431,9 @@ func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
 	close(accts)
 
 	s.db.TrieDB().ToggleNodeCache(true)
-
-	// save bal with root to a JSON file: only for debug usage
-	AllBlockAccessListKV[blockNum] = newBals
 }
+
+var ZeroBalance = new(uint256.Int)
 
 func (s *StateDB) PrefetchAccessListWithAllKV(blockNum uint64) {
 	// parallelize the access list prefetching
@@ -461,11 +446,14 @@ func (s *StateDB) PrefetchAccessListWithAllKV(blockNum uint64) {
 		addr := bal.Address
 		kvs := bal.StorageKV
 
-		// skip if account is EOA with 0 balance or newly created contract
-		// !(bal.Balance.IsZero() && bal.CodeHash == nil) &&
+		if bal.Balance == nil {
+			bal.Balance = ZeroBalance
+			bal.Root = types.EmptyRootHash
+			bal.CodeHash = types.EmptyCodeHash.Bytes()
+		}
 		acct := types.StateAccount{
 			Nonce:    bal.Nonce,
-			Balance:  &bal.Balance,
+			Balance:  bal.Balance,
 			CodeHash: bal.CodeHash,
 			Root:     bal.Root,
 		}
@@ -561,7 +549,10 @@ func (s *StateDB) SetPreStorageRoot(blockNum uint64, accts chan *AcctChan) {
 }
 
 func SaveKToJson() {
-	fileName := "access_lists.100.json"
+	if balType != BalKeyConstruction {
+		return
+	}
+	fileName := "access_lists.2000.json"
 	file, err := os.Create(fileName)
 	if err != nil {
 		log.Error("Failed to create JSON file: %v", err)
@@ -576,10 +567,10 @@ func SaveKToJson() {
 }
 
 func SaveAVKVToJson() {
-	if balType != WithAddrKeySlotV {
+	if balType != BalKeyValConstruction {
 		return
 	}
-	fileName := "access_lists_kv_root.json"
+	fileName := "access_lists_kv_root.2000.json"
 	file, err := os.Create("./" + fileName)
 	if err != nil {
 		log.Error("Failed to create JSON file: %v", err)
@@ -596,7 +587,7 @@ func SaveAVKVToJson() {
 
 func init() {
 	// load the access lists for all blocks
-	println("Importing BAL")
+	println("Importing BAL:", balType)
 	var fileName string
 	switch balType {
 	case OnlyKey:
@@ -609,8 +600,7 @@ func init() {
 				return
 			}
 			if err := json.Unmarshal(data, &AllBlockAccessLists); err != nil {
-				log.Error("Failed to unmarshal access lists", "err", err)
-				return
+				panic("Failed to unmarshal access lists")
 			}
 		}
 	case WithAddrKeySlotV:
@@ -623,22 +613,20 @@ func init() {
 				return
 			}
 			if err := json.Unmarshal(data, &AllBlockAccessListKV); err != nil {
-				log.Error("Failed to unmarshal access lists", "err", err)
-				return
+				panic("Failed to unmarshal access lists")
 			}
 		}
 	case WithAllKV:
 		{
 			println("bal allKV")
-			fileName = "access_lists_kv_root.json"
+			fileName = "access_lists_kv_root.2000.json"
 			data, err := os.ReadFile(fileName)
 			if err != nil {
 				log.Error("Failed to load access lists", "err", err)
 				return
 			}
 			if err := json.Unmarshal(data, &AllBlockAccessListKV); err != nil {
-				log.Error("Failed to unmarshal access lists", "err", err)
-				return
+				panic("Failed to unmarshal access lists")
 			}
 
 			tp = NewThreadPool(40)
@@ -1021,11 +1009,22 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	switch balType {
 	case BalKeyConstruction:
 		{
-			_, ok := AllBlockAccessLists[s.blockNumber]
-			if !ok {
-				bal := AllBlockAccessLists[s.blockNumber]
-				AllBlockAccessLists[s.blockNumber] = append(bal, types.AccessTuple{Address: addr})
+			bal := AllBlockAccessLists[s.blockNumber]
+			AllBlockAccessLists[s.blockNumber] = append(bal,
+				types.AccessTuple{Address: addr, StorageKeys: []common.Hash{}},
+			)
+		}
+	case BalKeyValConstruction:
+		{
+			bal := AllBlockAccessListKV[s.blockNumber]
+			newBal := AccessListKV{Address: addr, StorageKV: []StorageKV{}}
+			if acct != nil {
+				newBal.Nonce = acct.Nonce
+				newBal.Balance = acct.Balance
+				newBal.Root = acct.Root
+				newBal.CodeHash = acct.CodeHash
 			}
+			AllBlockAccessListKV[s.blockNumber] = append(bal, newBal)
 		}
 	}
 	// Short circuit if the account is not found

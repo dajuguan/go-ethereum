@@ -343,7 +343,8 @@ func importChain(ctx *cli.Context) error {
 			}
 		}
 	}
-	state.SaveToJson()
+	state.SaveKToJson()
+	state.SaveAVKVToJson()
 	chain.Stop()
 	fmt.Printf("Import done in %v.\n\n", time.Since(start))
 
