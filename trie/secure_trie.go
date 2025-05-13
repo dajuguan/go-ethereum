@@ -106,6 +106,7 @@ func (t *StateTrie) MustGet(key []byte) []byte {
 // Metric for counting trie I/O depth
 var AcctTrieDepth = SafeMap{m: make(map[int]int)}
 var StorageTrieDepth = SafeMap{m: make(map[int]int)}
+var Depth1Addrs = []common.Address{}
 
 type SafeMap struct {
 	mu sync.RWMutex
@@ -130,17 +131,17 @@ func (sm *SafeMap) Set(key int, value int) {
 // If the specified storage slot is not in the trie, nil will be returned.
 // If a trie node is not found in the database, a MissingNodeError is returned.
 func (t *StateTrie) GetStorage(_ common.Address, key []byte) ([]byte, error) {
-	enc, err := t.trie.Get(crypto.Keccak256(key))
-	// enc, err, depth := t.trie.GetWithDepth(crypto.Keccak256(key))
+	// enc, err := t.trie.Get(crypto.Keccak256(key))
+	enc, err, depth := t.trie.GetWithDepth(crypto.Keccak256(key))
 	if err != nil || len(enc) == 0 {
 		return nil, err
 	}
 
-	// v := 0
-	// if val, ok := StorageTrieDepth.Get(depth); ok {
-	// 	v = val
-	// }
-	// StorageTrieDepth.Set(depth, v+1)
+	v := 0
+	if val, ok := StorageTrieDepth.Get(depth); ok {
+		v = val
+	}
+	StorageTrieDepth.Set(depth, v+1)
 
 	_, content, _, err := rlp.Split(enc)
 	return content, err
@@ -150,17 +151,17 @@ func (t *StateTrie) GetStorage(_ common.Address, key []byte) ([]byte, error) {
 // If the specified account is not in the trie, nil will be returned.
 // If a trie node is not found in the database, a MissingNodeError is returned.
 func (t *StateTrie) GetAccount(address common.Address) (*types.StateAccount, error) {
-	res, err := t.trie.Get(crypto.Keccak256(address.Bytes()))
-	// res, err, depth := t.trie.GetWithDepth(crypto.Keccak256(address.Bytes()))
+	// res, err := t.trie.Get(crypto.Keccak256(address.Bytes()))
+	res, err, depth := t.trie.GetWithDepth(crypto.Keccak256(address.Bytes()))
 	if res == nil || err != nil {
 		return nil, err
 	}
 
-	// v := 0
-	// if val, ok := AcctTrieDepth.Get(depth); ok {
-	// 	v = val
-	// }
-	// AcctTrieDepth.Set(depth, v+1)
+	v := 0
+	if val, ok := AcctTrieDepth.Get(depth); ok {
+		v = val
+	}
+	AcctTrieDepth.Set(depth, v+1)
 
 	ret := new(types.StateAccount)
 	err = rlp.DecodeBytes(res, ret)

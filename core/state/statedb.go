@@ -251,9 +251,10 @@ const (
 	WithAllKV
 	BalKeyConstruction
 	BalKeyValConstruction
+	Vanilla
 )
 
-const balType = WithAllKV
+const balType = OnlyKey
 
 func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 	s.blockNumber = blockNum
@@ -267,6 +268,7 @@ func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 		s.PrefetchAccessListWithAllKV(blockNum)
 	case BalKeyConstruction:
 	case BalKeyValConstruction:
+	case Vanilla:
 		return
 	}
 }

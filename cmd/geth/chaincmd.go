@@ -426,7 +426,7 @@ func showMetrics() {
 
 	fmt.Println("account trie I/O depth", trie.AcctTrieDepth)
 	fmt.Println("storage trie I/O depth", trie.StorageTrieDepth)
-
+	
 	fmt.Println("IO time:", core.IoTime, "ExeTime:", core.ExeTime)
 	fmt.Println("Acct Prefetch:", core.AcctPrefetchTime, "Storage Prefetch:", core.StoragePrefetchTime, "Total:", state.TotalPrefetchTime)
 	fmt.Println("IO Acct:", core.AcctTime, "Storage:", core.StorageTime, "Total IO:", core.AcctTime+core.StorageTime, "Commit:", core.CommitTime)
