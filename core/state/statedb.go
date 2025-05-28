@@ -240,8 +240,23 @@ type AccessListKV struct {
 	StorageKV []StorageKV    `json:"storageKeys" gencodec:"required"`
 }
 
+type AcctPostValues struct {
+	Nonce     uint64                      `json:"nonce"`
+	Balance   *uint256.Int                `json:"balance"`
+	Code      []byte                      `json:"code"`
+	StorageKV map[common.Hash]common.Hash `json:"storageKV"`
+	Destruct  bool                        `json:"destruct"`
+}
+
+// For acccount destruct or storage clearing corresponding values would be 0
+type TxPostValues map[common.Address]*AcctPostValues
+
 var AllBlockAccessLists = map[uint64]types.AccessList{}
 var AllBlockAccessListKV = map[uint64][]AccessListKV{}
+
+// Blocknumber => TxIndex => TxPostValues
+var AllBlockTxPostValues = map[uint64]map[int]TxPostValues{}
+var TotalPrefetchTime = time.Duration(0)
 
 type BALType int
 
@@ -251,9 +266,10 @@ const (
 	WithAllKV
 	BalKeyConstruction
 	BalKeyValConstruction
+	BalPreblockKeysPostValues
 )
 
-const balType = WithAllKV
+const balType = BalPreblockKeysPostValues
 
 func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 	s.blockNumber = blockNum
@@ -267,11 +283,10 @@ func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 		s.PrefetchAccessListWithAllKV(blockNum)
 	case BalKeyConstruction:
 	case BalKeyValConstruction:
+	case BalPreblockKeysPostValues:
 		return
 	}
 }
-
-var TotalPrefetchTime = time.Duration(0)
 
 func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 	// parallelize the access list prefetching
@@ -548,36 +563,41 @@ func (s *StateDB) SetPreStorageRoot(blockNum uint64, accts chan *AcctChan) {
 	}
 }
 
-func SaveKToJson() {
-	if balType != BalKeyConstruction {
-		return
-	}
-	fileName := "access_lists.2000.json"
-	file, err := os.Create(fileName)
-	if err != nil {
-		log.Error("Failed to create JSON file: %v", err)
-	}
-	defer file.Close()
+func SaveBalToJson() {
+	var (
+		fileName string
+		data     any
+	)
+	switch balType {
+	case BalKeyConstruction:
+		{
+			fileName = "access_lists.2000.json"
+			data = AllBlockAccessLists
 
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(AllBlockAccessLists); err != nil {
-		log.Error("Failed to write JSON file: %v", err)
-	}
-}
+		}
+	case BalKeyValConstruction:
+		{
+			fileName = "access_lists_kv_root.2000.json"
+			data = AllBlockAccessListKV
 
-func SaveAVKVToJson() {
-	if balType != BalKeyValConstruction {
-		return
+		}
+	case BalPreblockKeysPostValues:
+		{
+			fileName = "access_lists_kpostv.json"
+			data = map[string]any{"pre": AllBlockAccessLists, "post": AllBlockTxPostValues}
+		}
+	default:
+		{
+			fmt.Println("Unsupported BAL type for JSON saving:", balType)
+			return
+		}
 	}
-	fileName := "access_lists_kv_root.2000.json"
 	file, err := os.Create("./" + fileName)
 	if err != nil {
 		log.Error("Failed to create JSON file: %v", err)
 	}
 	defer file.Close()
 
-	data := AllBlockAccessListKV
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(data); err != nil {
@@ -638,6 +658,43 @@ func init() {
 	}
 
 	println("Imported BAL", fileName)
+}
+
+func (s *StateDB) updatePostAccount(addr common.Address, nonce uint64, balance *uint256.Int, code []byte) {
+	blockMap, ok := AllBlockTxPostValues[s.blockNumber]
+	if !ok {
+		blockMap = make(map[int]TxPostValues)
+		AllBlockTxPostValues[s.blockNumber] = blockMap
+	}
+	txPostValues, ok := blockMap[s.txIndex]
+	if !ok {
+		txPostValues = make(TxPostValues)
+		blockMap[s.txIndex] = txPostValues
+	}
+	acct := txPostValues[addr]
+	if acct == nil {
+		acct = &AcctPostValues{StorageKV: make(map[common.Hash]common.Hash)}
+		txPostValues[addr] = acct
+	}
+	acct.Nonce = nonce
+	acct.Balance = balance
+	// only set code when it's contract creation
+	if code != nil {
+		acct.Code = code
+	}
+}
+
+func (s *StateDB) destructPostAccount(addr common.Address) {
+	txPostValues := AllBlockTxPostValues[s.blockNumber][s.txIndex]
+	if txPostValues == nil {
+		txPostValues = make(TxPostValues)
+		AllBlockTxPostValues[s.blockNumber][s.txIndex] = txPostValues
+	}
+	acct := txPostValues[addr]
+	if acct == nil {
+		acct = &AcctPostValues{StorageKV: make(map[common.Hash]common.Hash)}
+	}
+	acct.Destruct = true
 }
 
 // setError remembers the first non-nil error it is called with.
@@ -922,6 +979,7 @@ func (s *StateDB) SelfDestruct(addr common.Address) uint256.Int {
 	// for journalling a second time.
 	if !stateObject.selfDestructed {
 		s.journal.destruct(addr)
+		s.destructPostAccount(addr)
 		stateObject.markSelfdestructed()
 	}
 	return prevBalance
@@ -1008,6 +1066,7 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	// save to bal addrs
 	switch balType {
 	case BalKeyConstruction:
+	case BalPreblockKeysPostValues:
 		{
 			bal := AllBlockAccessLists[s.blockNumber]
 			AllBlockAccessLists[s.blockNumber] = append(bal,
