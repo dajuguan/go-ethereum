@@ -257,6 +257,7 @@ const (
 const balType = OnlyKey
 
 func (s *StateDB) PrefetchAccessList(blockNum uint64) {
+	fmt.Println("PrefetchAccessList for block:", blockNum)
 	s.blockNumber = blockNum
 
 	switch balType {
@@ -282,6 +283,21 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 		return
 	}
 	log.Info("PrefetchAccessListOnlyKey for", "block:", blockNum)
+
+	// test read a contract slot, account and slot 都是collaspe之后存到数据库的，所以数据库中slot的key也是hash之后的，而不是原始的
+	addr := common.HexToAddress("0x111111125421ca6dc452d289314280a0f8842a65")
+	_, err := s.reader.Account(addr)
+	if err != nil {
+		log.Error("fail to fetch account:", err)
+	}
+	slot := common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000003")
+	fmt.Println("acct hash:", crypto.Keccak256Hash(addr[:]))
+	fmt.Println("slot hash:", crypto.Keccak256Hash(slot[:]))
+	_, err = s.reader.Storage(addr, slot)
+	if err != nil {
+		log.Error("fail to fetch slot:", err)
+	}
+	panic("exit")
 
 	// currently, perf is better when cache is on
 	// s.db.TrieDB().ToggleNodeCache(true)

@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
@@ -96,6 +97,7 @@ func DeleteAccountTrieNode(db ethdb.KeyValueWriter, path []byte) {
 
 // ReadStorageTrieNode retrieves the storage trie node with the specified node path.
 func ReadStorageTrieNode(db ethdb.KeyValueReader, accountHash common.Hash, path []byte) []byte {
+	fmt.Println("ReadStorageTrieNode", accountHash, hexutil.Encode(path))
 	data, _ := db.Get(storageTrieNodeKey(accountHash, path))
 	return data
 }
