@@ -252,6 +252,26 @@ func (s *stateObject) updatePostStorage(key, value common.Hash) {
 	acct.StorageKV[key] = value
 }
 
+func (s *stateObject) deletePostStorage(key common.Hash) {
+	db := s.db
+	blockMap, ok := AllBlockTxPostValues[db.blockNumber]
+	if !ok {
+		blockMap = make(map[int]TxPostValues)
+		AllBlockTxPostValues[db.blockNumber] = blockMap
+	}
+	txPostValues, ok := blockMap[db.txIndex]
+	if !ok {
+		txPostValues = make(TxPostValues)
+		blockMap[db.txIndex] = txPostValues
+	}
+	acct := txPostValues[s.address]
+	if acct == nil {
+		acct = &AcctPostValues{StorageKV: make(map[common.Hash]common.Hash)}
+		txPostValues[s.address] = acct
+	}
+	delete(acct.StorageKV, key)
+}
+
 // SetState updates a value in account storage.
 // It returns the previous value
 func (s *stateObject) SetState(key, value common.Hash) common.Hash {
@@ -263,7 +283,6 @@ func (s *stateObject) SetState(key, value common.Hash) common.Hash {
 	}
 	// New value is different, update and journal the change
 	s.db.journal.storageChange(s.address, key, prev, origin)
-	s.updatePostStorage(key, value)
 	s.setState(key, value, origin)
 	return prev
 }
@@ -273,9 +292,12 @@ func (s *stateObject) SetState(key, value common.Hash) common.Hash {
 func (s *stateObject) setState(key common.Hash, value common.Hash, origin common.Hash) {
 	// Storage slot is set back to its original value, undo the dirty marker
 	if value == origin {
+		s.deletePostStorage(key)
 		delete(s.dirtyStorage, key)
 		return
 	}
+	// Must be set here instead of SetState due to revert is called directly from setState
+	s.updatePostStorage(key, value)
 	s.dirtyStorage[key] = value
 }
 
@@ -516,12 +538,12 @@ func (s *stateObject) AddBalance(amount *uint256.Int) uint256.Int {
 func (s *stateObject) SetBalance(amount *uint256.Int) uint256.Int {
 	prev := *s.data.Balance
 	s.db.journal.balanceChange(s.address, s.data.Balance)
-	s.db.updatePostAccount(s.address, s.data.Nonce, amount, nil)
 	s.setBalance(amount)
 	return prev
 }
 
 func (s *stateObject) setBalance(amount *uint256.Int) {
+	s.db.updatePostAccount(s.address, s.data.Nonce, amount, nil)
 	s.data.Balance = amount
 }
 
@@ -598,24 +620,24 @@ func (s *stateObject) CodeSize() int {
 func (s *stateObject) SetCode(codeHash common.Hash, code []byte) (prev []byte) {
 	prev = slices.Clone(s.code)
 	s.db.journal.setCode(s.address, prev)
-	s.db.updatePostAccount(s.address, s.data.Nonce, s.data.Balance, code)
 	s.setCode(codeHash, code)
 	return prev
 }
 
 func (s *stateObject) setCode(codeHash common.Hash, code []byte) {
 	s.code = code
+	s.db.updatePostAccount(s.address, s.data.Nonce, s.data.Balance, code)
 	s.data.CodeHash = codeHash[:]
 	s.dirtyCode = true
 }
 
 func (s *stateObject) SetNonce(nonce uint64) {
-	s.db.updatePostAccount(s.address, nonce, s.data.Balance, nil)
 	s.db.journal.nonceChange(s.address, s.data.Nonce)
 	s.setNonce(nonce)
 }
 
 func (s *stateObject) setNonce(nonce uint64) {
+	s.db.updatePostAccount(s.address, nonce, s.data.Balance, nil)
 	s.data.Nonce = nonce
 }
 

@@ -583,7 +583,7 @@ func SaveBalToJson() {
 		}
 	case BalPreblockKeysPostValuesConstruction:
 		{
-			fileName = "access_lists_kpostv.json"
+			fileName = "access_lists_kpostv.1.json"
 			data = map[string]any{"pre": AllBlockAccessLists, "post": AllBlockTxPostValues}
 		}
 	default:
@@ -684,7 +684,7 @@ func (s *StateDB) updatePostAccount(addr common.Address, nonce uint64, balance *
 	}
 }
 
-func (s *StateDB) destructPostAccount(addr common.Address) {
+func (s *StateDB) destructPostAccount(addr common.Address, destruct bool) {
 	txPostValues := AllBlockTxPostValues[s.blockNumber][s.txIndex]
 	if txPostValues == nil {
 		txPostValues = make(TxPostValues)
@@ -694,7 +694,7 @@ func (s *StateDB) destructPostAccount(addr common.Address) {
 	if acct == nil {
 		acct = &AcctPostValues{StorageKV: make(map[common.Hash]common.Hash)}
 	}
-	acct.Destruct = true
+	acct.Destruct = destruct
 }
 
 // setError remembers the first non-nil error it is called with.
@@ -979,7 +979,7 @@ func (s *StateDB) SelfDestruct(addr common.Address) uint256.Int {
 	// for journalling a second time.
 	if !stateObject.selfDestructed {
 		s.journal.destruct(addr)
-		s.destructPostAccount(addr)
+		s.destructPostAccount(addr, true)
 		stateObject.markSelfdestructed()
 	}
 	return prevBalance
