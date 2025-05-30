@@ -266,10 +266,10 @@ const (
 	WithAllKV
 	BalKeyConstruction
 	BalKeyValConstruction
-	BalPreblockKeysPostValues
+	BalPreblockKeysPostValuesConstruction
 )
 
-const balType = BalPreblockKeysPostValues
+const balType = BalPreblockKeysPostValuesConstruction
 
 func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 	s.blockNumber = blockNum
@@ -283,7 +283,7 @@ func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 		s.PrefetchAccessListWithAllKV(blockNum)
 	case BalKeyConstruction:
 	case BalKeyValConstruction:
-	case BalPreblockKeysPostValues:
+	case BalPreblockKeysPostValuesConstruction:
 		return
 	}
 }
@@ -581,7 +581,7 @@ func SaveBalToJson() {
 			data = AllBlockAccessListKV
 
 		}
-	case BalPreblockKeysPostValues:
+	case BalPreblockKeysPostValuesConstruction:
 		{
 			fileName = "access_lists_kpostv.json"
 			data = map[string]any{"pre": AllBlockAccessLists, "post": AllBlockTxPostValues}
@@ -1066,7 +1066,7 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	// save to bal addrs
 	switch balType {
 	case BalKeyConstruction:
-	case BalPreblockKeysPostValues:
+	case BalPreblockKeysPostValuesConstruction:
 		{
 			bal := AllBlockAccessLists[s.blockNumber]
 			AllBlockAccessLists[s.blockNumber] = append(bal,

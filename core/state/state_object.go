@@ -199,7 +199,7 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	// save to bal storage keys
 	switch balType {
 	case BalKeyConstruction:
-	case BalPreblockKeysPostValues:
+	case BalPreblockKeysPostValuesConstruction:
 		{
 			bal := AllBlockAccessLists[s.db.blockNumber]
 			for i, val := range bal {
