@@ -473,7 +473,7 @@ func showMetrics() {
 	fmt.Println("StateCopyTime:    ", state.StateCopyTime)
 	fmt.Println("StateCopyNewTime: ", state.StateNewTime)
 	fmt.Println("StateDeepCpTime:  ", state.StateDeepCpTime)
-	fmt.Println("ParalleleExeTime: ", core.ParallelExeTime)
+	fmt.Println("ParallelExeTime:  ", core.ParallelExeTime)
 	fmt.Println("PostMergeTime:    ", core.PostMergeTime)
 
 	// total

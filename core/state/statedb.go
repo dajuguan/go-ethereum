@@ -471,11 +471,39 @@ func (s *StateDB) PrestateAtIndex(txIndex int) (*StateDB, error) {
 	if txIndex == 0 {
 		return s.Copy(), nil
 	}
-	state, ok := s.postStates[txIndex-1]
-	if !ok {
-		return nil, fmt.Errorf("PreState at txIndex: %d doesn't exists, PrefetchStateBAL must be called first", txIndex)
+	var (
+		postBal = AllBlockTxPostValues[s.blockNumber]
+	)
+	postState := s.Copy()
+	postState.prefetcher = nil
+	for index := range txIndex {
+		postVals := postBal[index]
+		start := time.Now()
+		for addr, acct := range postVals {
+			account := postState.getStateObject(addr)
+			if account == nil {
+				continue
+			}
+
+			if acct.Destruct {
+				account.markSelfdestructed()
+				continue
+			}
+
+			account.setNonce(acct.Nonce)
+			if acct.Balance != nil {
+				account.setBalance(acct.Balance)
+			}
+			if acct.Code != nil {
+				account.setCode(crypto.Keccak256Hash(acct.Code), acct.Code)
+			}
+			maps.Copy(account.originStorage, acct.StorageKV)
+			postState.setStateObject(account)
+		}
+		StateSetTime += time.Since(start)
 	}
-	return state, nil
+
+	return postState, nil
 }
 
 // StartPrefetcher initializes a new trie prefetcher to pull in nodes from the

@@ -93,7 +93,7 @@ func (p *ParallelStateProcessor) executeParallel(block *types.Block, statedb *st
 	case BALPreState:
 		{
 			start := time.Now()
-			statedb.MergePostBal()
+			// statedb.MergePostBal()
 			PrefetchMergeBALTime += time.Since(start)
 			preStateProvider = statedb
 		}
@@ -117,15 +117,17 @@ func (p *ParallelStateProcessor) executeParallel(block *types.Block, statedb *st
 	exeStart := time.Now()
 	postEntries := make([][]state.JournalEntry, len(block.Transactions()))
 	for i, tx := range block.Transactions() {
-		cleanStatedb, err := preStateProvider.PrestateAtIndex(i)
-		if err != nil {
-			return nil, err
-		}
 
 		i := i
 		gpcp := *gp
 		workers.Go(func() error {
 			usedGas := new(uint64)
+
+			cleanStatedb, err := preStateProvider.PrestateAtIndex(i)
+			if err != nil {
+				return err
+			}
+
 			msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 			if err != nil {
 				return err
