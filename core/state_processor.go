@@ -84,7 +84,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	AcctPrefetchTime += statedb.AccountReads
 	StoragePrefetchTime += statedb.StorageReads
 
-	statedb.PrefetchAcctTrie(block.Number().Uint64())
+	// statedb.PrefetchAcctTrie(block.Number().Uint64())
 
 	exeStart := time.Now()
 	// Mutate the block and state according to any hard-fork specs
