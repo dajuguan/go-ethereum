@@ -104,6 +104,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	context = NewEVMBlockContext(header, p.chain, nil)
 	evm := vm.NewEVM(context, tracingStateDB, p.config, cfg)
 
+	statedb.SetTxContext(common.Hash{}, -1)
+
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, evm)
 	}
@@ -126,6 +128,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
 	}
+	statedb.SetTxContext(common.Hash{}, len(block.Transactions()))
 	// Read requests if Prague is enabled.
 	var requests [][]byte
 	if p.config.IsPrague(block.Number(), block.Time()) {
