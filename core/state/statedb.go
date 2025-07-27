@@ -583,7 +583,7 @@ func SaveBalToJson() {
 		}
 	case BalPreblockKeysPostValuesConstruction:
 		{
-			fileName = "access_lists_kpostv.1.json"
+			fileName = "bal_postKV.json"
 			data = map[string]any{"pre": AllBlockAccessLists, "post": AllBlockTxPostValues}
 		}
 	default:
