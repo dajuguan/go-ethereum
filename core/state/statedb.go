@@ -253,7 +253,7 @@ const (
 	BalKeyValConstruction
 )
 
-const balType = WithAllKV
+const balType = BalKeyValConstruction
 
 func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 	s.blockNumber = blockNum
@@ -570,7 +570,7 @@ func SaveAVKVToJson() {
 	if balType != BalKeyValConstruction {
 		return
 	}
-	fileName := "access_lists_kv_root.2000.json"
+	fileName := "bal_postKV.json"
 	file, err := os.Create("./" + fileName)
 	if err != nil {
 		log.Error("Failed to create JSON file: %v", err)
@@ -619,7 +619,7 @@ func init() {
 	case WithAllKV:
 		{
 			println("bal allKV")
-			fileName = "access_lists_kv_root.2000.json"
+			fileName = "bal_postKV.json"
 			data, err := os.ReadFile(fileName)
 			if err != nil {
 				log.Error("Failed to load access lists", "err", err)
