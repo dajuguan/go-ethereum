@@ -696,7 +696,10 @@ func ReadBlock(db ethdb.Reader, hash common.Hash, number uint64) *types.Block {
 
 // WriteBlock serializes a block into the database, header and body separately.
 func WriteBlock(db ethdb.KeyValueWriter, block *types.Block) {
-	WriteBody(db, block.Hash(), block.NumberU64(), block.Body())
+	if block.NumberU64()%2 == 0 {
+		WriteBody(db, block.Hash(), block.NumberU64(), block.Body())
+	}
+	// Must write header due to blockHash opCode
 	WriteHeader(db, block.Header())
 }
 
