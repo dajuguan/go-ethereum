@@ -30,8 +30,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
+	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
@@ -71,6 +71,7 @@ type Backend interface {
 	SubscribeRemovedLogsEvent(ch chan<- core.RemovedLogsEvent) event.Subscription
 	SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscription
 
+	CurrentView() *filtermaps.ChainView
 	NewMatcherBackend() filtermaps.MatcherBackend
 }
 
@@ -97,7 +98,7 @@ type logCacheElem struct {
 }
 
 // cachedLogElem loads block logs from the backend and caches the result.
-func (sys *FilterSystem) cachedLogElem(ctx context.Context, blockHash common.Hash, number uint64) (*logCacheElem, error) {
+func (sys *FilterSystem) cachedLogElem(ctx context.Context, blockHash common.Hash, number, time uint64) (*logCacheElem, error) {
 	cached, ok := sys.logsCache.Get(blockHash)
 	if ok {
 		return cached, nil
@@ -118,6 +119,7 @@ func (sys *FilterSystem) cachedLogElem(ctx context.Context, blockHash common.Has
 		for _, log := range txLogs {
 			log.BlockHash = blockHash
 			log.BlockNumber = number
+			log.BlockTimestamp = time
 			log.TxIndex = uint(i)
 			log.Index = logIdx
 			logIdx++
@@ -289,6 +291,9 @@ func (es *EventSystem) SubscribeLogs(crit ethereum.FilterQuery, logs chan []*typ
 	if len(crit.Topics) > maxTopics {
 		return nil, errExceedMaxTopics
 	}
+	if len(crit.Addresses) > maxAddresses {
+		return nil, errExceedMaxAddresses
+	}
 	var from, to rpc.BlockNumber
 	if crit.FromBlock == nil {
 		from = rpc.LatestBlockNumber
@@ -311,7 +316,7 @@ func (es *EventSystem) SubscribeLogs(crit ethereum.FilterQuery, logs chan []*typ
 	}
 	// Queries beyond the pruning cutoff are not supported.
 	if uint64(from) < es.backend.HistoryPruningCutoff() {
-		return nil, &ethconfig.PrunedHistoryError{}
+		return nil, &history.PrunedHistoryError{}
 	}
 
 	// only interested in new mined logs

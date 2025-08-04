@@ -29,12 +29,13 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
+	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/txpool"
+	"github.com/ethereum/go-ethereum/core/txpool/locals"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
-	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -156,7 +157,7 @@ func (b *EthAPIBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumbe
 	}
 	block := b.eth.blockchain.GetBlockByNumber(bn)
 	if block == nil && bn < b.HistoryPruningCutoff() {
-		return nil, &ethconfig.PrunedHistoryError{}
+		return nil, &history.PrunedHistoryError{}
 	}
 	return block, nil
 }
@@ -168,7 +169,7 @@ func (b *EthAPIBackend) BlockByHash(ctx context.Context, hash common.Hash) (*typ
 	}
 	block := b.eth.blockchain.GetBlock(hash, *number)
 	if block == nil && *number < b.HistoryPruningCutoff() {
-		return nil, &ethconfig.PrunedHistoryError{}
+		return nil, &history.PrunedHistoryError{}
 	}
 	return block, nil
 }
@@ -181,7 +182,7 @@ func (b *EthAPIBackend) GetBody(ctx context.Context, hash common.Hash, number rp
 	body := b.eth.blockchain.GetBody(hash)
 	if body == nil {
 		if uint64(number) < b.HistoryPruningCutoff() {
-			return nil, &ethconfig.PrunedHistoryError{}
+			return nil, &history.PrunedHistoryError{}
 		}
 		return nil, errors.New("block body not found")
 	}
@@ -195,7 +196,9 @@ func (b *EthAPIBackend) BlockByNumberOrHash(ctx context.Context, blockNrOrHash r
 	if hash, ok := blockNrOrHash.Hash(); ok {
 		header := b.eth.blockchain.GetHeaderByHash(hash)
 		if header == nil {
-			return nil, errors.New("header for hash not found")
+			// Return 'null' and no error if block is not found.
+			// This behavior is required by RPC spec.
+			return nil, nil
 		}
 		if blockNrOrHash.RequireCanonical && b.eth.blockchain.GetCanonicalHash(header.Number.Uint64()) != hash {
 			return nil, errors.New("hash is not currently canonical")
@@ -203,7 +206,7 @@ func (b *EthAPIBackend) BlockByNumberOrHash(ctx context.Context, blockNrOrHash r
 		block := b.eth.blockchain.GetBlock(hash, header.Number.Uint64())
 		if block == nil {
 			if header.Number.Uint64() < b.HistoryPruningCutoff() {
-				return nil, &ethconfig.PrunedHistoryError{}
+				return nil, &history.PrunedHistoryError{}
 			}
 			return nil, errors.New("header found, but block body is missing")
 		}
@@ -235,7 +238,10 @@ func (b *EthAPIBackend) StateAndHeaderByNumber(ctx context.Context, number rpc.B
 	}
 	stateDb, err := b.eth.BlockChain().StateAt(header.Root)
 	if err != nil {
-		return nil, nil, err
+		stateDb, err = b.eth.BlockChain().HistoricState(header.Root)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	return stateDb, header, nil
 }
@@ -257,7 +263,10 @@ func (b *EthAPIBackend) StateAndHeaderByNumberOrHash(ctx context.Context, blockN
 		}
 		stateDb, err := b.eth.BlockChain().StateAt(header.Root)
 		if err != nil {
-			return nil, nil, err
+			stateDb, err = b.eth.BlockChain().HistoricState(header.Root)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		return stateDb, header, nil
 	}
@@ -271,6 +280,10 @@ func (b *EthAPIBackend) HistoryPruningCutoff() uint64 {
 
 func (b *EthAPIBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {
 	return b.eth.blockchain.GetReceiptsByHash(hash), nil
+}
+
+func (b *EthAPIBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, blockIndex uint64) (*types.Receipt, error) {
+	return b.eth.blockchain.GetCanonicalReceipt(tx, blockHash, blockNumber, blockIndex)
 }
 
 func (b *EthAPIBackend) GetLogs(ctx context.Context, hash common.Hash, number uint64) ([][]*types.Log, error) {
@@ -307,19 +320,24 @@ func (b *EthAPIBackend) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscri
 }
 
 func (b *EthAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction) error {
-	locals := b.eth.localTxTracker
-	if locals != nil {
-		if err := locals.Track(signedTx); err != nil {
-			return err
-		}
-	}
-	// No error will be returned to user if the transaction fails stateful
-	// validation (e.g., no available slot), as the locally submitted transactions
-	// may be resubmitted later via the local tracker.
 	err := b.eth.txPool.Add([]*types.Transaction{signedTx}, false)[0]
-	if err != nil && locals == nil {
+
+	// If the local transaction tracker is not configured, returns whatever
+	// returned from the txpool.
+	if b.eth.localTxTracker == nil {
 		return err
 	}
+	// If the transaction fails with an error indicating it is invalid, or if there is
+	// very little chance it will be accepted later (e.g., the gas price is below the
+	// configured minimum, or the sender has insufficient funds to cover the cost),
+	// propagate the error to the user.
+	if err != nil && !locals.IsTemporaryReject(err) {
+		return err
+	}
+	// No error will be returned to user if the transaction fails with a temporary
+	// error and might be accepted later (e.g., the transaction pool is full).
+	// Locally submitted transactions will be resubmitted later via the local tracker.
+	b.eth.localTxTracker.Track(signedTx)
 	return nil
 }
 
@@ -340,25 +358,25 @@ func (b *EthAPIBackend) GetPoolTransaction(hash common.Hash) *types.Transaction 
 	return b.eth.txPool.Get(hash)
 }
 
-// GetTransaction retrieves the lookup along with the transaction itself associate
-// with the given transaction hash.
+// GetCanonicalTransaction retrieves the lookup along with the transaction itself
+// associate with the given transaction hash.
 //
-// An error will be returned if the transaction is not found, and background
-// indexing for transactions is still in progress. The error is used to indicate the
-// scenario explicitly that the transaction might be reachable shortly.
+// A null will be returned if the transaction is not found. The transaction is not
+// existent from the node's perspective. This can be due to the transaction indexer
+// not being finished. The caller must explicitly check the indexer progress.
 //
-// A null will be returned in the transaction is not found and background transaction
-// indexing is already finished. The transaction is not existent from the perspective
-// of node.
-func (b *EthAPIBackend) GetTransaction(ctx context.Context, txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64, error) {
-	lookup, tx, err := b.eth.blockchain.GetTransactionLookup(txHash)
-	if err != nil {
-		return false, nil, common.Hash{}, 0, 0, err
-	}
+// Notably, only the transaction in the canonical chain is visible.
+func (b *EthAPIBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+	lookup, tx := b.eth.blockchain.GetCanonicalTransaction(txHash)
 	if lookup == nil || tx == nil {
-		return false, nil, common.Hash{}, 0, 0, nil
+		return false, nil, common.Hash{}, 0, 0
 	}
-	return true, tx, lookup.BlockHash, lookup.BlockIndex, lookup.Index, nil
+	return true, tx, lookup.BlockHash, lookup.BlockIndex, lookup.Index
+}
+
+// TxIndexDone returns true if the transaction indexer has finished indexing.
+func (b *EthAPIBackend) TxIndexDone() bool {
+	return b.eth.blockchain.TxIndexDone()
 }
 
 func (b *EthAPIBackend) GetPoolNonce(ctx context.Context, addr common.Address) (uint64, error) {
@@ -385,11 +403,15 @@ func (b *EthAPIBackend) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.S
 	return b.eth.txPool.SubscribeTransactions(ch, true)
 }
 
-func (b *EthAPIBackend) SyncProgress() ethereum.SyncProgress {
+func (b *EthAPIBackend) SyncProgress(ctx context.Context) ethereum.SyncProgress {
 	prog := b.eth.Downloader().Progress()
 	if txProg, err := b.eth.blockchain.TxIndexProgress(); err == nil {
 		prog.TxIndexFinishedBlocks = txProg.Indexed
 		prog.TxIndexRemainingBlocks = txProg.Remaining
+	}
+	remain, err := b.eth.blockchain.StateIndexProgress()
+	if err == nil {
+		prog.StateIndexRemaining = remain
 	}
 	return prog
 }
@@ -435,6 +457,14 @@ func (b *EthAPIBackend) RPCEVMTimeout() time.Duration {
 
 func (b *EthAPIBackend) RPCTxFeeCap() float64 {
 	return b.eth.config.RPCTxFeeCap
+}
+
+func (b *EthAPIBackend) CurrentView() *filtermaps.ChainView {
+	head := b.eth.blockchain.CurrentBlock()
+	if head == nil {
+		return nil
+	}
+	return filtermaps.NewChainView(b.eth.blockchain, head.Number.Uint64(), head.Hash())
 }
 
 func (b *EthAPIBackend) NewMatcherBackend() filtermaps.MatcherBackend {

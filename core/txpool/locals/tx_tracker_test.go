@@ -17,7 +17,6 @@
 package locals
 
 import (
-	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -29,7 +28,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/params"
@@ -66,7 +64,7 @@ func newTestEnv(t *testing.T, n int, gasTip uint64, journal string) *testEnv {
 	})
 
 	db := rawdb.NewMemoryDatabase()
-	chain, _ := core.NewBlockChain(db, nil, gspec, nil, ethash.NewFaker(), vm.Config{}, nil)
+	chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
 
 	legacyPool := legacypool.New(legacypool.DefaultConfig, chain)
 	pool, err := txpool.New(gasTip, chain, []txpool.SubPool{legacyPool})
@@ -91,10 +89,12 @@ func (env *testEnv) close() {
 	env.chain.Stop()
 }
 
+// nolint:unused
 func (env *testEnv) setGasTip(gasTip uint64) {
 	env.pool.SetGasTip(new(big.Int).SetUint64(gasTip))
 }
 
+// nolint:unused
 func (env *testEnv) makeTx(nonce uint64, gasPrice *big.Int) *types.Transaction {
 	if nonce == 0 {
 		head := env.chain.CurrentHeader()
@@ -121,6 +121,7 @@ func (env *testEnv) makeTxs(n int) []*types.Transaction {
 	return txs
 }
 
+// nolint:unused
 func (env *testEnv) commit() {
 	head := env.chain.CurrentBlock()
 	block := env.chain.GetBlock(head.Hash(), head.Number.Uint64())
@@ -134,60 +135,6 @@ func (env *testEnv) commit() {
 	env.chain.InsertChain(blocks)
 	if err := env.pool.Sync(); err != nil {
 		panic(err)
-	}
-}
-
-func TestRejectInvalids(t *testing.T) {
-	env := newTestEnv(t, 10, 0, "")
-	defer env.close()
-
-	var cases = []struct {
-		gasTip uint64
-		tx     *types.Transaction
-		expErr error
-		commit bool
-	}{
-		{
-			tx:     env.makeTx(5, nil), // stale
-			expErr: core.ErrNonceTooLow,
-		},
-		{
-			tx:     env.makeTx(11, nil), // future transaction
-			expErr: nil,
-		},
-		{
-			gasTip: params.GWei,
-			tx:     env.makeTx(0, new(big.Int).SetUint64(params.GWei/2)), // low price
-			expErr: txpool.ErrUnderpriced,
-		},
-		{
-			tx:     types.NewTransaction(10, common.Address{0x00}, big.NewInt(1000), params.TxGas, big.NewInt(params.GWei), nil), // invalid signature
-			expErr: types.ErrInvalidSig,
-		},
-		{
-			commit: true,
-			tx:     env.makeTx(10, nil), // stale
-			expErr: core.ErrNonceTooLow,
-		},
-		{
-			tx:     env.makeTx(11, nil),
-			expErr: nil,
-		},
-	}
-	for i, c := range cases {
-		if c.gasTip != 0 {
-			env.setGasTip(c.gasTip)
-		}
-		if c.commit {
-			env.commit()
-		}
-		gotErr := env.tracker.Track(c.tx)
-		if c.expErr == nil && gotErr != nil {
-			t.Fatalf("%d, unexpected error: %v", i, gotErr)
-		}
-		if c.expErr != nil && !errors.Is(gotErr, c.expErr) {
-			t.Fatalf("%d, unexpected error, want: %v, got: %v", i, c.expErr, gotErr)
-		}
 	}
 }
 

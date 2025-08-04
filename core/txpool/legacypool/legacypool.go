@@ -35,7 +35,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -237,7 +236,7 @@ type LegacyPool struct {
 	currentHead   atomic.Pointer[types.Header] // Current head of the blockchain
 	currentState  *state.StateDB               // Current state in the blockchain head
 	pendingNonces *noncer                      // Pending state tracking virtual nonces
-	reserver      *txpool.Reserver             // Address reserver to ensure exclusivity across subpools
+	reserver      txpool.Reserver              // Address reserver to ensure exclusivity across subpools
 
 	pending map[common.Address]*list     // All currently processable transactions
 	queue   map[common.Address]*list     // Queued but non-processable transactions
@@ -302,7 +301,7 @@ func (pool *LegacyPool) Filter(tx *types.Transaction) bool {
 // Init sets the gas price needed to keep a transaction in the pool and the chain
 // head to allow balance / nonce checks. The internal
 // goroutines will be spun up and the pool deemed operational afterwards.
-func (pool *LegacyPool) Init(gasTip uint64, head *types.Header, reserver *txpool.Reserver) error {
+func (pool *LegacyPool) Init(gasTip uint64, head *types.Header, reserver txpool.Reserver) error {
 	// Set the address reserver to request exclusive access to pooled accounts
 	pool.reserver = reserver
 
@@ -640,11 +639,18 @@ func (pool *LegacyPool) validateAuth(tx *types.Transaction) error {
 	if err := pool.checkDelegationLimit(tx); err != nil {
 		return err
 	}
-	// Authorities must not conflict with any pending or queued transactions,
-	// nor with addresses that have already been reserved.
+	// For symmetry, allow at most one in-flight tx for any authority with a
+	// pending transaction.
 	if auths := tx.SetCodeAuthorities(); len(auths) > 0 {
 		for _, auth := range auths {
-			if pool.pending[auth] != nil || pool.queue[auth] != nil {
+			var count int
+			if pending := pool.pending[auth]; pending != nil {
+				count += pending.Len()
+			}
+			if queue := pool.queue[auth]; queue != nil {
+				count += queue.Len()
+			}
+			if count > 1 {
 				return ErrAuthorityReserved
 			}
 			// Because there is no exclusive lock held between different subpools
@@ -927,8 +933,8 @@ func (pool *LegacyPool) addRemoteSync(tx *types.Transaction) error {
 
 // Add enqueues a batch of transactions into the pool if they are valid.
 //
-// If sync is set, the method will block until all internal maintenance related
-// to the add is finished. Only use this during tests for determinism!
+// Note, if sync is set the method will block until all internal maintenance
+// related to the add is finished. Only use this during tests for determinism.
 func (pool *LegacyPool) Add(txs []*types.Transaction, sync bool) []error {
 	// Filter out known ones without obtaining the pool lock or recovering signatures
 	var (
@@ -1054,12 +1060,6 @@ func (pool *LegacyPool) GetMetadata(hash common.Hash) *txpool.TxMetadata {
 		Type: tx.Type(),
 		Size: tx.Size(),
 	}
-}
-
-// GetBlobs is not supported by the legacy transaction pool, it is just here to
-// implement the txpool.SubPool interface.
-func (pool *LegacyPool) GetBlobs(vhashes []common.Hash) ([]*kzg4844.Blob, []*kzg4844.Proof) {
-	return nil, nil
 }
 
 // Has returns an indicator whether txpool has a transaction cached with the
@@ -1487,22 +1487,22 @@ func (pool *LegacyPool) promoteExecutables(accounts []common.Address) []*types.T
 // equal number for all for accounts with many pending transactions.
 func (pool *LegacyPool) truncatePending() {
 	pending := uint64(0)
-	for _, list := range pool.pending {
-		pending += uint64(list.Len())
+
+	// Assemble a spam order to penalize large transactors first
+	spammers := prque.New[uint64, common.Address](nil)
+	for addr, list := range pool.pending {
+		// Only evict transactions from high rollers
+		length := uint64(list.Len())
+		pending += length
+		if length > pool.config.AccountSlots {
+			spammers.Push(addr, length)
+		}
 	}
 	if pending <= pool.config.GlobalSlots {
 		return
 	}
-
 	pendingBeforeCap := pending
-	// Assemble a spam order to penalize large transactors first
-	spammers := prque.New[int64, common.Address](nil)
-	for addr, list := range pool.pending {
-		// Only evict transactions from high rollers
-		if uint64(list.Len()) > pool.config.AccountSlots {
-			spammers.Push(addr, int64(list.Len()))
-		}
-	}
+
 	// Gradually drop transactions from offenders
 	offenders := []common.Address{}
 	for pending > pool.config.GlobalSlots && !spammers.Empty() {
@@ -1820,6 +1820,16 @@ func (t *lookup) Remove(hash common.Hash) {
 	delete(t.txs, hash)
 }
 
+// Clear resets the lookup structure, removing all stored entries.
+func (t *lookup) Clear() {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	t.slots = 0
+	t.txs = make(map[common.Hash]*types.Transaction)
+	t.auths = make(map[common.Address][]common.Hash)
+}
+
 // TxsBelowTip finds all remote transactions below the given tip threshold.
 func (t *lookup) TxsBelowTip(threshold *big.Int) types.Transactions {
 	found := make(types.Transactions, 0, 128)
@@ -1886,6 +1896,9 @@ func numSlots(tx *types.Transaction) int {
 
 // Clear implements txpool.SubPool, removing all tracked txs from the pool
 // and rotating the journal.
+//
+// Note, do not use this in production / live code. In live code, the pool is
+// meant to reset on a separate thread to avoid DoS vectors.
 func (pool *LegacyPool) Clear() {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
@@ -1904,12 +1917,17 @@ func (pool *LegacyPool) Clear() {
 	// The transaction addition may attempt to reserve the sender addr which
 	// can't happen until Clear releases the reservation lock. Clear cannot
 	// acquire the subpool lock until the transaction addition is completed.
-	for _, tx := range pool.all.txs {
-		senderAddr, _ := types.Sender(pool.signer, tx)
-		pool.reserver.Release(senderAddr)
+
+	for addr := range pool.pending {
+		if _, ok := pool.queue[addr]; !ok {
+			pool.reserver.Release(addr)
+		}
 	}
-	pool.all = newLookup()
-	pool.priced = newPricedList(pool.all)
+	for addr := range pool.queue {
+		pool.reserver.Release(addr)
+	}
+	pool.all.Clear()
+	pool.priced.Reheap()
 	pool.pending = make(map[common.Address]*list)
 	pool.queue = make(map[common.Address]*list)
 	pool.pendingNonces = newNoncer(pool.currentState)

@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -124,9 +125,13 @@ func NewSimulatedBeacon(period uint64, feeRecipient common.Address, eth *eth.Eth
 			return nil, err
 		}
 	}
+
+	// cap the dev mode period to a reasonable maximum value to avoid
+	// overflowing the time.Duration (int64) that it will occupy
+	const maxPeriod = uint64(math.MaxInt64 / time.Second)
 	return &SimulatedBeacon{
 		eth:                eth,
-		period:             period,
+		period:             min(period, maxPeriod),
 		shutdownCh:         make(chan struct{}),
 		engineAPI:          engineAPI,
 		lastBlockTime:      block.Time,
@@ -201,6 +206,12 @@ func (c *SimulatedBeacon) sealBlock(withdrawals []*types.Withdrawal, timestamp u
 	}
 	if fcResponse == engine.STATUS_SYNCING {
 		return errors.New("chain rewind prevented invocation of payload creation")
+	}
+
+	// If the payload was already known, we can skip the rest of the process.
+	// This edge case is possible due to a race condition between seal and debug.setHead.
+	if fcResponse.PayloadStatus.Status == engine.VALID && fcResponse.PayloadID == nil {
+		return nil
 	}
 
 	envelope, err := c.engineAPI.getPayload(*fcResponse.PayloadID, true)

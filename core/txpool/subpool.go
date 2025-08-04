@@ -23,7 +23,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/holiman/uint256"
 )
@@ -105,7 +104,7 @@ type SubPool interface {
 	// These should not be passed as a constructor argument - nor should the pools
 	// start by themselves - in order to keep multiple subpools in lockstep with
 	// one another.
-	Init(gasTip uint64, head *types.Header, reserver *Reserver) error
+	Init(gasTip uint64, head *types.Header, reserver Reserver) error
 
 	// Close terminates any background processing threads and releases any held
 	// resources.
@@ -132,11 +131,6 @@ type SubPool interface {
 	// GetMetadata returns the transaction type and transaction size with the
 	// given transaction hash.
 	GetMetadata(hash common.Hash) *TxMetadata
-
-	// GetBlobs returns a number of blobs are proofs for the given versioned hashes.
-	// This is a utility method for the engine API, enabling consensus clients to
-	// retrieve blobs from the pools directly instead of the network.
-	GetBlobs(vhashes []common.Hash) ([]*kzg4844.Blob, []*kzg4844.Proof)
 
 	// ValidateTxBasics checks whether a transaction is valid according to the consensus
 	// rules, but does not check state-dependent validation such as sufficient balance.
