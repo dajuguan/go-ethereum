@@ -672,7 +672,7 @@ func (s *StateDB) updatePostAccount(addr common.Address, nonce uint64, balance *
 	}
 	acct.Nonce = nonce
 	acct.Balance = balance.Clone()
-	// only set code when it's contract creation
+	// only set code when it's contract creation or 7702 tx ([]byte{}!=nil)
 	if code != nil {
 		acct.Code = code
 	}

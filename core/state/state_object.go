@@ -626,6 +626,10 @@ func (s *stateObject) SetCode(codeHash common.Hash, code []byte) (prev []byte) {
 
 func (s *stateObject) setCode(codeHash common.Hash, code []byte) {
 	s.code = code
+	// For 7702, if code is nil, it means clear. Here, we set it to []{} to ensure it'll be cleared.
+	if code == nil {
+		code = []byte{}
+	}
 	s.db.updatePostAccount(s.address, s.data.Nonce, s.data.Balance, code)
 	s.data.CodeHash = codeHash[:]
 	s.dirtyCode = true
