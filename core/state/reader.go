@@ -63,7 +63,6 @@ type StateReader interface {
 	// - Returns an error only if an unexpected issue occurs
 	// - The returned account is safe to modify after the call
 	Account(addr common.Address) (*types.StateAccount, error)
-	AccountBAL(addr common.Address) (*types.StateAccount, error)
 
 	// Storage retrieves the storage slot associated with a particular account
 	// address and slot key.
@@ -72,7 +71,6 @@ type StateReader interface {
 	// - Returns an error only if an unexpected issue occurs
 	// - The returned storage slot is safe to modify after the call
 	Storage(addr common.Address, slot common.Hash) (common.Hash, error)
-	StorageBAL(addr common.Address, slot common.Hash, tr *trie.StateTrie) (common.Hash, error)
 }
 
 // Reader defines the interface for accessing accounts, storage slots and contract
@@ -188,10 +186,6 @@ func (r *flatReader) Account(addr common.Address) (*types.StateAccount, error) {
 	return acct, nil
 }
 
-func (r *flatReader) AccountBAL(addr common.Address) (*types.StateAccount, error) {
-	return r.Account(addr)
-}
-
 // Storage implements StateReader, retrieving the storage slot specified by the
 // address and slot key.
 //
@@ -218,10 +212,6 @@ func (r *flatReader) Storage(addr common.Address, key common.Hash) (common.Hash,
 	var value common.Hash
 	value.SetBytes(content)
 	return value, nil
-}
-
-func (r *flatReader) StorageBAL(addr common.Address, key common.Hash, tr *trie.StateTrie) (common.Hash, error) {
-	return r.Storage(addr, key)
 }
 
 // trieReader implements the StateReader interface, providing functions to access
@@ -275,14 +265,6 @@ func (r *trieReader) account(addr common.Address) (*types.StateAccount, error) {
 		r.subRoots[addr] = types.EmptyRootHash
 	} else {
 		r.subRoots[addr] = account.Root
-	}
-	return account, nil
-}
-
-func (r *trieReader) AccountBAL(addr common.Address) (*types.StateAccount, error) {
-	account, err := r.mainTrie.GetAccount(addr)
-	if err != nil {
-		return nil, err
 	}
 	return account, nil
 }
@@ -344,15 +326,6 @@ func (r *trieReader) Storage(addr common.Address, key common.Hash) (common.Hash,
 	return value, nil
 }
 
-func (r *trieReader) StorageBAL(addr common.Address, key common.Hash, tr *trie.StateTrie) (common.Hash, error) {
-	ret, err := tr.GetStorage(addr, key.Bytes())
-	if err != nil {
-		return common.Hash{}, err
-	}
-
-	return common.BytesToHash(ret), nil
-}
-
 // multiStateReader is the aggregation of a list of StateReader interface,
 // providing state access by leveraging all readers. The checking priority
 // is determined by the position in the reader list.
@@ -393,18 +366,6 @@ func (r *multiStateReader) Account(addr common.Address) (*types.StateAccount, er
 	return nil, errors.Join(errs...)
 }
 
-func (r *multiStateReader) AccountBAL(addr common.Address) (*types.StateAccount, error) {
-	var errs []error
-	for _, reader := range r.readers {
-		acct, err := reader.AccountBAL(addr)
-		if err == nil {
-			return acct, nil
-		}
-		errs = append(errs, err)
-	}
-	return nil, errors.Join(errs...)
-}
-
 // Storage implementing StateReader interface, retrieving the storage slot
 // associated with a particular account address and slot key.
 //
@@ -415,18 +376,6 @@ func (r *multiStateReader) Storage(addr common.Address, slot common.Hash) (commo
 	var errs []error
 	for _, reader := range r.readers {
 		slot, err := reader.Storage(addr, slot)
-		if err == nil {
-			return slot, nil
-		}
-		errs = append(errs, err)
-	}
-	return common.Hash{}, errors.Join(errs...)
-}
-
-func (r *multiStateReader) StorageBAL(addr common.Address, slot common.Hash, tr *trie.StateTrie) (common.Hash, error) {
-	var errs []error
-	for _, reader := range r.readers {
-		slot, err := reader.StorageBAL(addr, slot, tr)
 		if err == nil {
 			return slot, nil
 		}

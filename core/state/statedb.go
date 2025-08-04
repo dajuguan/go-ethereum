@@ -328,7 +328,7 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 
 		tp.AddTask(func() {
 			// it'll trigger map caching in trie, which is not thread safe before due to keccakhash
-			acct, err := s.reader.AccountBAL(addr)
+			acct, err := s.reader.Account(addr)
 			if err != nil {
 				log.Error("fail to fetch account:", addr)
 			}
@@ -343,7 +343,7 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 	for range lenAccts {
 		state := <-accts
 		acctsArr = append(acctsArr, state)
-		// must set it first to avoid accounts read later in storageBAL
+		// must set it first to avoid accounts read later in Storage
 		s.setStateObject(state.obj)
 	}
 	close(accts)
@@ -362,17 +362,10 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 		}
 		lenSlots += len(keys)
 
-		acct := obj.origin
-		tr, err := trie.NewStateTrie(trie.StorageTrieID(s.originalRoot, obj.addrHash, acct.Root), s.db.TrieDB())
-		if err != nil {
-			log.Error("fail to create trie for:", addr)
-			panic("fail to create trie for:")
-		}
-
 		for _, key := range keys {
 			key := key
 			tp.AddTask(func() {
-				val, err := obj.db.reader.StorageBAL(addr, key, tr)
+				val, err := obj.db.reader.Storage(addr, key)
 				if err != nil {
 					log.Error("fail to fetch storage:", addr, key)
 				}
@@ -420,7 +413,7 @@ func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
 
 		tp.AddTask(func() {
 			// it'll trigger map caching in trie, which is not thread safe before due to keccakhash
-			acct, err := s.reader.AccountBAL(addr)
+			acct, err := s.reader.Account(addr)
 			if err != nil {
 				log.Error("fail to fetch account:", addr)
 			}
@@ -501,7 +494,7 @@ func (s *StateDB) PrefetchAcctTrie(blockNum uint64) {
 			addr := bal.Address
 			tp.AddTask(func() {
 				// trigger trie caching(nodeCacheOn)
-				s.reader.AccountBAL(addr)
+				s.reader.Account(addr)
 			})
 		}
 	}()
@@ -523,7 +516,7 @@ func (s *StateDB) GetPreStorageRoot(blockNum uint64) chan *AcctChan {
 	//          accts <- &AcctChan{addr, nil}
 	//          continue
 	//      }
-	//      acct, _ := s.reader.AccountBAL(addr)
+	//      acct, _ := s.reader.Account(addr)
 	//      accts <- &AcctChan{addr, acct}
 	//  }
 	// }()
@@ -538,7 +531,7 @@ func (s *StateDB) GetPreStorageRoot(blockNum uint64) chan *AcctChan {
 			continue
 		}
 		tp.AddTask(func() {
-			acct, _ := s.reader.AccountBAL(addr)
+			acct, _ := s.reader.Account(addr)
 			accts <- &AcctChan{addr, acct}
 		})
 	}
