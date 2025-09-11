@@ -214,13 +214,9 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	case BalKeyValConstruction:
 		{
 			bal := AllBlockAccessListKV[s.db.blockNumber]
-			for i, val := range bal {
-				if val.Address == s.address {
-					kv := val.StorageKV
-					bal[i].StorageKV = append(kv, StorageKV{Key: key, Val: value})
-					break
-				}
-			}
+			kv := bal[s.address]
+			kv.StorageKV = append(kv.StorageKV, StorageKV{Key: key, Val: value})
+			bal[s.address] = kv
 		}
 	}
 	// Schedule the resolved storage slots for prefetching if it's enabled.

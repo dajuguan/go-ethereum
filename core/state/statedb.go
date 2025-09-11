@@ -253,7 +253,7 @@ type AcctPostValues struct {
 type TxPostValues map[common.Address]*AcctPostValues
 
 var AllBlockAccessLists = map[uint64]types.AccessList{}
-var AllBlockAccessListKV = map[uint64][]AccessListKV{}
+var AllBlockAccessListKV = map[uint64]map[common.Address]AccessListKV{}
 
 // Blocknumber => TxIndex => TxPostValues
 var AllBlockTxPostValues = map[uint64]map[int]TxPostValues{}
@@ -263,14 +263,19 @@ type BALType int
 
 const (
 	OnlyKey BALType = iota
+	// Provide account's key and storage's pre-block kv. Defauult used.
 	WithAddrKeySlotV
+	// Provide account and storage's pre-block kv
 	WithAllKV
+	// Generate BAl for OnlyKey.
 	BalKeyConstruction
+	// Generate BAl for WithAddrKeySlotV.
 	BalKeyValConstruction
+	// TODO: This is the same with BalKeyConstruction, and it's haven't been migrated from the po/bal_generation branch.
 	BalPreblockKeysPostValuesConstruction
 )
 
-const balType = BalPreblockKeysPostValuesConstruction
+const balType = WithAddrKeySlotV
 
 func (s *StateDB) PrefetchAccessList(blockNum uint64) {
 	s.blockNumber = blockNum
@@ -333,8 +338,14 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 				log.Error("fail to fetch account:", addr)
 			}
 			// Insert into the live set
-			obj := newObject(s, addr, acct)
-			accts <- StateObject{obj, keys}
+			if acct != nil {
+				obj := newObject(s, addr, acct)
+				accts <- StateObject{obj, keys}
+			} else {
+				// Shouldn't create object for empty account as Exist only check if self.stateObjet has obj for this account.
+				accts <- StateObject{nil, nil}
+			}
+
 		})
 	}
 
@@ -342,9 +353,11 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 	acctsArr := []StateObject{}
 	for range lenAccts {
 		state := <-accts
-		acctsArr = append(acctsArr, state)
-		// must set it first to avoid accounts read later in Storage
-		s.setStateObject(state.obj)
+		if state.obj != nil {
+			acctsArr = append(acctsArr, state)
+			// must set it first to avoid accounts read later in Storage
+			s.setStateObject(state.obj)
+		}
 	}
 	close(accts)
 	s.AccountReads += time.Since(accountReadStart)
@@ -357,7 +370,7 @@ func (s *StateDB) PrefetchAccessListWithoutKV(blockNum uint64) {
 		keys := state.keys
 		addr := obj.Address()
 
-		if obj.origin == nil {
+		if obj == nil || obj.origin == nil {
 			continue
 		}
 		lenSlots += len(keys)
@@ -418,20 +431,26 @@ func (s *StateDB) PrefetchAccessListWithKV(blockNum uint64) {
 				log.Error("fail to fetch account:", addr)
 			}
 			// Insert into the live set
-			obj := newObject(s, addr, acct)
 			if acct != nil {
+				obj := newObject(s, addr, acct)
+
 				for _, kv := range kvs {
 					obj.originStorage[kv.Key] = kv.Val
 				}
+				accts <- obj
+			} else {
+				// Shouldn't create object for empty account as Exist only check if self.stateObjet has obj for this account.
+				accts <- nil
 			}
-			accts <- obj
 		})
 	}
 
 	// use channel to sync tasks
 	for range lenAccts {
 		obj := <-accts
-		s.setStateObject(obj)
+		if obj != nil {
+			s.setStateObject(obj)
+		}
 	}
 	s.AccountReads += time.Since(accountReadStart)
 	s.createObject(params.SystemAddress)
@@ -465,6 +484,10 @@ func (s *StateDB) PrefetchAccessListWithAllKV(blockNum uint64) {
 			Balance:  bal.Balance,
 			CodeHash: bal.CodeHash,
 			Root:     bal.Root,
+		}
+		// Shouldn't create object for empty account as Exist only check if self.stateObjet has obj for this account.
+		if bal.Balance == nil && bal.Nonce == 0 && (bal.Root == common.Hash{}) {
+			continue
 		}
 
 		obj := newObject(s, addr, &acct)
@@ -571,7 +594,7 @@ func SaveBalToJson() {
 		}
 	case BalKeyValConstruction:
 		{
-			fileName = "access_lists_kv_root.2000.json"
+			fileName = "access_lists_kv_root.500.json"
 			data = AllBlockAccessListKV
 
 		}
@@ -620,7 +643,7 @@ func init() {
 	case WithAddrKeySlotV:
 		{
 			println("bal addrKeySlotV")
-			fileName = "access_lists_kv.2000.json"
+			fileName = "access_lists_kv_root.500.json"
 			data, err := os.ReadFile(fileName)
 			if err != nil {
 				log.Error("Failed to load access lists", "err", err)
@@ -633,7 +656,7 @@ func init() {
 	case WithAllKV:
 		{
 			println("bal allKV")
-			fileName = "access_lists_kv_root.2000.json"
+			fileName = "access_lists_kv_root.500.json"
 			data, err := os.ReadFile(fileName)
 			if err != nil {
 				log.Error("Failed to load access lists", "err", err)
@@ -642,9 +665,6 @@ func init() {
 			if err := json.Unmarshal(data, &AllBlockAccessListKV); err != nil {
 				panic("Failed to unmarshal access lists")
 			}
-
-			tp = NewThreadPool(40)
-			tp.Start()
 		}
 	case BalKeyConstruction:
 		{
@@ -1075,15 +1095,20 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 		}
 	case BalKeyValConstruction:
 		{
-			bal := AllBlockAccessListKV[s.blockNumber]
-			newBal := AccessListKV{Address: addr, StorageKV: []StorageKV{}}
-			if acct != nil {
-				newBal.Nonce = acct.Nonce
-				newBal.Balance = acct.Balance
-				newBal.Root = acct.Root
-				newBal.CodeHash = acct.CodeHash
+			_, exist := AllBlockAccessListKV[s.blockNumber][addr]
+			if !exist {
+				newBal := AccessListKV{Address: addr, StorageKV: []StorageKV{}}
+				if acct != nil {
+					newBal.Nonce = acct.Nonce
+					newBal.Balance = acct.Balance
+					newBal.Root = acct.Root
+					newBal.CodeHash = acct.CodeHash
+				}
+				if AllBlockAccessListKV[s.blockNumber] == nil {
+					AllBlockAccessListKV[s.blockNumber] = make(map[common.Address]AccessListKV)
+				}
+				AllBlockAccessListKV[s.blockNumber][addr] = newBal
 			}
-			AllBlockAccessListKV[s.blockNumber] = append(bal, newBal)
 		}
 	}
 	// Short circuit if the account is not found
